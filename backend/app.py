@@ -809,7 +809,7 @@ if __name__ == '__main__':
     print("+ Database initialized")
     
     # Get port from environment (Replit sets this) or default to 5001
-    port = int(os.environ.get('PORT', 5001))
+    port = int(os.environ.get('PORT', 8080))
     
     print(f"+ Server starting on port {port}")
     print("Press Ctrl+C to stop the server")
