@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: portfolio-analyzer
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT backend.app:app
+    plan: free
+    healthCheckPath: /api/check-auth
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.12
+      - key: FLASK_ENV
+        value: production

@@ -1,0 +1,6 @@
+Investment ticker symbol,Exchange,Currency,Starting investment dollar value,Ending investment dollar value,Starting share price,Ending share price,Dividends and distributions,Transaction fees
+AAPL,NASDAQ,USD,15000.00,18000.00,150.00,180.00,125.00,19.90
+MSFT,NASDAQ,USD,12000.00,13500.00,300.00,337.50,80.00,19.90
+GOOGL,NASDAQ,USD,3000.00,3500.00,120.00,140.00,25.00,9.95
+TSLA,NASDAQ,USD,4000.00,4400.00,200.00,220.00,0.00,19.90
+NVDA,NASDAQ,USD,9000.00,10800.00,450.00,540.00,0.00,9.95

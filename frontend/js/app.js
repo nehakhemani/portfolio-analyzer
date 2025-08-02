@@ -1,0 +1,869 @@
+// Use current host for API calls (works for any domain/IP)
+const API_BASE = `${window.location.protocol}//${window.location.host}/api`;
+let currentPortfolio = null;
+
+// Authentication check
+async function checkAuthentication() {
+    try {
+        const response = await fetch(`${API_BASE}/check-auth`, {
+            credentials: 'include'
+        });
+        const data = await response.json();
+        
+        if (!data.authenticated) {
+            // Redirect to login
+            window.location.href = '/login.html';
+            return false;
+        }
+        
+        // Show user info
+        if (data.username) {
+            showUserInfo(data.username);
+        }
+        
+        return true;
+    } catch (error) {
+        console.error('Authentication check failed:', error);
+        window.location.href = '/login.html';
+        return false;
+    }
+}
+
+function showUserInfo(username) {
+    // Add user info to header
+    const header = document.querySelector('header');
+    if (header && !document.getElementById('userInfo')) {
+        const userInfo = document.createElement('div');
+        userInfo.id = 'userInfo';
+        userInfo.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 15px; margin-top: 10px;">
+                <span style="color: #4cc9f0;">Logged in as: ${username}</span>
+                <button onclick="logout()" style="
+                    background: rgba(255, 107, 107, 0.2);
+                    border: 1px solid #ff6b6b;
+                    color: #ff6b6b;
+                    padding: 5px 10px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    font-size: 12px;
+                ">Logout</button>
+            </div>
+        `;
+        header.appendChild(userInfo);
+    }
+}
+
+async function logout() {
+    try {
+        await fetch(`${API_BASE}/logout`, {
+            method: 'POST',
+            credentials: 'include'
+        });
+        window.location.href = '/login.html';
+    } catch (error) {
+        console.error('Logout failed:', error);
+        window.location.href = '/login.html';
+    }
+}
+
+// Enhanced API call wrapper with authentication
+async function authenticatedFetch(url, options = {}) {
+    const defaultOptions = {
+        credentials: 'include',
+        headers: {
+            // Only set Content-Type for non-FormData requests
+            ...(options.body instanceof FormData ? {} : {'Content-Type': 'application/json'}),
+            ...options.headers
+        },
+        ...options
+    };
+    
+    try {
+        const response = await fetch(url, defaultOptions);
+        
+        if (response.status === 401) {
+            // Unauthorized - redirect to login
+            window.location.href = '/login.html';
+            return null;
+        }
+        
+        if (response.status === 429) {
+            alert('Rate limit exceeded. Please wait a moment before trying again.');
+            return null;
+        }
+        
+        return response;
+    } catch (error) {
+        console.error('Network error:', error);
+        throw error;
+    }
+}
+
+// Test API connection with authentication
+async function testConnection() {
+    console.log('Testing API connection...');
+    try {
+        const response = await authenticatedFetch(`${API_BASE}/portfolio`);
+        if (response && response.ok) {
+            console.log('✓ API connection successful');
+            const data = await response.json();
+            console.log('Portfolio data:', data);
+        } else if (response) {
+            console.error('✗ API returned error:', response.status);
+        }
+    } catch (error) {
+        console.error('✗ API connection failed:', error);
+    }
+}
+
+// Initialize
+document.addEventListener('DOMContentLoaded', async function() {
+    console.log('App.js loaded successfully');
+    
+    // Check authentication first
+    const isAuthenticated = await checkAuthentication();
+    if (!isAuthenticated) {
+        return; // Will redirect to login
+    }
+    
+    testConnection();
+    loadPortfolio();
+    
+    // File upload handler
+    const fileInput = document.getElementById('csvFile');
+    if (fileInput) {
+        fileInput.addEventListener('change', function(e) {
+            console.log('File selected:', e.target.files[0]);
+            uploadPortfolio(e.target.files[0]);
+        });
+    } else {
+        console.error('File input not found!');
+    }
+    
+    // Add holding form handler
+    const holdingForm = document.getElementById('holdingForm');
+    if (holdingForm) {
+        holdingForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            addNewHolding();
+        });
+    }
+});
+
+async function loadPortfolio() {
+    console.log('Loading portfolio...');
+    try {
+        const response = await authenticatedFetch(`${API_BASE}/portfolio`);
+        if (response && response.ok) {
+            const data = await response.json();
+            console.log('Portfolio loaded:', data);
+            currentPortfolio = data;
+            updateUI();
+        }
+    } catch (error) {
+        console.error('Error loading portfolio:', error);
+        // Initialize with empty data
+        currentPortfolio = {
+            holdings: [],
+            summary: {
+                total_value: 0,
+                total_return: 0,
+                return_percentage: 0,
+                total_dividends: 0,
+                holdings_count: 0
+            }
+        };
+        updateUI();
+    }
+}
+
+async function uploadPortfolio(file) {
+    console.log('Uploading file:', file.name);
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    try {
+        console.log('Making upload request to:', `${API_BASE}/upload`);
+        const response = await authenticatedFetch(`${API_BASE}/upload`, {
+            method: 'POST',
+            body: formData,
+            // Don't set Content-Type header, let browser set it with boundary for multipart
+        });
+        
+        console.log('Upload response status:', response?.status);
+        console.log('Upload response headers:', response?.headers);
+        
+        if (response && response.ok) {
+            const data = await response.json();
+            console.log('Upload response data:', data);
+            alert(`Portfolio uploaded successfully! Added ${data.holdings_count} holdings.`);
+            loadPortfolio();
+        } else if (response) {
+            // Check if response is HTML instead of JSON
+            const contentType = response.headers.get('content-type');
+            console.log('Response content-type:', contentType);
+            console.log('Response status:', response.status);
+            console.log('Response statusText:', response.statusText);
+            console.log('Response URL:', response.url);
+            
+            if (contentType && contentType.includes('text/html')) {
+                const htmlText = await response.text();
+                console.log('HTML response (first 500 chars):', htmlText.substring(0, 500));
+                
+                // Check if it's a Flask error page
+                if (htmlText.includes('Werkzeug') || htmlText.includes('Internal Server Error')) {
+                    alert('Server Error: There was an internal server error. Check the server console for details.');
+                } else if (htmlText.includes('404') || htmlText.includes('Not Found')) {
+                    alert('Upload Error: Upload endpoint not found. Check server configuration.');
+                } else {
+                    alert('Server returned HTML instead of JSON. This usually means a server error occurred. Check server logs.');
+                }
+            } else {
+                try {
+                    const error = await response.json();
+                    console.log('JSON error response:', error);
+                    alert('Error uploading portfolio: ' + (error.error || 'Unknown error'));
+                } catch (jsonError) {
+                    const text = await response.text();
+                    console.log('Non-JSON response text:', text);
+                    alert('Server error (status ' + response.status + '): ' + text.substring(0, 100));
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Upload error:', error);
+        alert('Error uploading portfolio: ' + error.message);
+    }
+}
+
+async function fetchMarketData() {
+    console.log('Fetching market data...');
+    const btn = document.getElementById('marketDataBtn');
+    btn.textContent = 'Fetching...';
+    
+    try {
+        const response = await authenticatedFetch(`${API_BASE}/market-data`);
+        if (response && response.ok) {
+            const data = await response.json();
+            console.log('Market data response:', data);
+            alert('Market data updated!');
+            loadPortfolio();
+        }
+    } catch (error) {
+        console.error('Market data error:', error);
+        alert('Error fetching market data: ' + error.message);
+    } finally {
+        btn.textContent = 'Fetch Market Data';
+    }
+}
+
+
+async function exportData() {
+    console.log('Exporting data...');
+    try {
+        const response = await axios.get(`${API_BASE}/export?format=csv`);
+        console.log('Export response:', response);
+        downloadFile(response.data, 'portfolio_export.csv', 'text/csv');
+    } catch (error) {
+        console.error('Export error:', error);
+        alert('Error exporting data: ' + (error.response?.data?.error || error.message));
+    }
+}
+
+function updateUI() {
+    console.log('Updating UI with portfolio:', currentPortfolio);
+    if (!currentPortfolio) return;
+    
+    // Update summary (always in USD)
+    const summary = currentPortfolio.summary;
+    document.getElementById('totalValue').textContent = `$${summary.total_value.toLocaleString()} USD`;
+    document.getElementById('totalReturn').textContent = `$${summary.total_return.toLocaleString()} USD`;
+    document.getElementById('returnPct').textContent = `${summary.return_percentage.toFixed(2)}%`;
+    document.getElementById('holdingsCount').textContent = summary.holdings_count;
+    
+    // Show currency conversion info if available
+    if (currentPortfolio.currency_info && Object.keys(currentPortfolio.currency_info.conversions).length > 0) {
+        updateCurrencyInfo(currentPortfolio.currency_info);
+    }
+    
+    // Update last update time
+    document.getElementById('lastUpdate').textContent = new Date().toLocaleString();
+    
+    // Update charts
+    updateCharts();
+    
+    // Update holdings management section
+    updateHoldingsManagement();
+}
+
+
+function updateCharts() {
+    console.log('Updating charts...');
+    if (!currentPortfolio || !currentPortfolio.holdings) {
+        console.log('No data for charts');
+        return;
+    }
+    
+    // Destroy existing charts if they exist
+    if (window.allocationChart && typeof window.allocationChart.destroy === 'function') {
+        window.allocationChart.destroy();
+    }
+    if (window.performanceChart && typeof window.performanceChart.destroy === 'function') {
+        window.performanceChart.destroy();
+    }
+    
+   // Allocation Chart - Filter out zero/negative value holdings
+    const holdings = currentPortfolio.holdings.filter(h => h.end_value > 0);
+    
+    if (holdings.length > 0) {
+        const allocationCtx = document.getElementById('allocationChart');
+        if (allocationCtx) {
+            window.allocationChart = new Chart(allocationCtx.getContext('2d'), {
+                type: 'doughnut',
+                data: {
+                    labels: holdings.map(h => h.ticker),
+                    datasets: [{
+                        data: holdings.map(h => h.end_value),
+                        backgroundColor: generateColors(holdings.length)
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: {
+                                color: '#e0e0e0'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+    
+    // Performance Chart - Only show holdings with value
+    const validHoldingsForChart = currentPortfolio.holdings.filter(h => h.end_value > 0);
+    if (validHoldingsForChart.length > 0) {
+        const performanceCtx = document.getElementById('performanceChart');
+        if (performanceCtx) {
+            const returns = validHoldingsForChart.map(h => {
+                return h.start_value > 0 ? 
+                    ((h.end_value - h.start_value) / h.start_value * 100) : 0;
+            });
+            
+            window.performanceChart = new Chart(performanceCtx.getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels: validHoldingsForChart.map(h => h.ticker),
+                    datasets: [{
+                        label: 'Return %',
+                        data: returns,
+                        backgroundColor: returns.map(r => r >= 0 ? 'rgba(74, 222, 128, 0.8)' : 'rgba(248, 113, 113, 0.8)'),
+                        borderColor: returns.map(r => r >= 0 ? '#4ade80' : '#f87171'),
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.1)'
+                            },
+                            ticks: {
+                                color: '#e0e0e0',
+                                callback: function(value) {
+                                    return value + '%';
+                                }
+                            }
+                        },
+                        x: {
+                            grid: {
+                                display: false
+                            },
+                            ticks: {
+                                color: '#e0e0e0'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            });
+        }
+    }
+}
+function generateColors(count) {
+    const colors = [];
+    for (let i = 0; i < count; i++) {
+        const hue = (i * 360 / count) % 360;
+        colors.push(`hsl(${hue}, 70%, 50%)`);
+    }
+    return colors;
+}
+
+// Update holdings management section
+function updateHoldingsManagement() {
+    if (!currentPortfolio || !currentPortfolio.holdings || currentPortfolio.holdings.length === 0) {
+        document.getElementById('holdingsManagement').style.display = 'none';
+        return;
+    }
+    
+    // Filter out holdings with zero or negative values
+    const validHoldings = currentPortfolio.holdings.filter(h => h.end_value > 0);
+    
+    if (validHoldings.length === 0) {
+        document.getElementById('holdingsManagement').style.display = 'none';
+        return;
+    }
+    
+    const holdingsManagement = document.getElementById('holdingsManagement');
+    const holdingsList = document.getElementById('holdingsList');
+    
+    holdingsManagement.style.display = 'block';
+    
+    // Create holdings table
+    const holdingsHTML = `
+        <table class="holdings-table">
+            <thead>
+                <tr>
+                    <th>Ticker</th>
+                    <th>Exchange</th>
+                    <th>Currency</th>
+                    <th>Initial Value</th>
+                    <th>Current Value</th>
+                    <th>Return</th>
+                    <th>Return %</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${validHoldings.map(holding => {
+                    const returnAmount = holding.end_value - holding.start_value;
+                    const returnPct = holding.start_value > 0 ? 
+                        ((holding.end_value - holding.start_value) / holding.start_value * 100) : 0;
+                    
+                    return `
+                        <tr>
+                            <td class="ticker">${holding.ticker}</td>
+                            <td>${holding.exchange || 'N/A'}</td>
+                            <td><span class="currency-badge">${holding.currency || 'USD'}</span></td>
+                            <td>${formatCurrency(holding.start_value, holding.currency)}</td>
+                            <td>${formatCurrency(holding.end_value, holding.currency)}</td>
+                            <td class="${returnAmount >= 0 ? 'positive' : 'negative'}">
+                                ${formatCurrency(returnAmount, holding.currency)}
+                            </td>
+                            <td class="${returnPct >= 0 ? 'positive' : 'negative'}">
+                                ${returnPct.toFixed(1)}%
+                            </td>
+                            <td>
+                                <button onclick="deleteHolding('${holding.ticker}')" 
+                                        class="delete-btn" 
+                                        title="Delete ${holding.ticker}">
+                                    ✕
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('')}
+            </tbody>
+        </table>
+    `;
+    
+    holdingsList.innerHTML = holdingsHTML;
+}
+
+function downloadFile(content, filename, contentType) {
+    const blob = new Blob([content], { type: contentType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+// Currency formatting function
+function formatCurrency(amount, currency) {
+    if (typeof amount !== 'number' || isNaN(amount)) {
+        return 'N/A';
+    }
+    
+    const currencySymbols = {
+        'USD': '$',
+        'EUR': '€',
+        'GBP': '£',
+        'JPY': '¥',
+        'CAD': 'C$',
+        'AUD': 'A$',
+        'CHF': 'CHF ',
+        'CNY': '¥',
+        'INR': '₹',
+        'KRW': '₩',
+        'BRL': 'R$',
+        'RUB': '₽',
+        'SGD': 'S$',
+        'HKD': 'HK$',
+        'SEK': 'kr',
+        'NOK': 'kr',
+        'DKK': 'kr',
+        'PLN': 'zł',
+        'CZK': 'Kč',
+        'HUF': 'Ft'
+    };
+    
+    const currencyCode = (currency || 'USD').toUpperCase();
+    const symbol = currencySymbols[currencyCode] || currencyCode + ' ';
+    
+    // Format based on currency (some currencies don't use decimals)
+    if (['JPY', 'KRW', 'HUF'].includes(currencyCode)) {
+        return `${symbol}${amount.toLocaleString('en-US', {maximumFractionDigits: 0})}`;
+    } else {
+        return `${symbol}${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+    }
+}
+
+// Update currency conversion info display
+function updateCurrencyInfo(currencyInfo) {
+    // Remove existing currency info
+    const existingInfo = document.getElementById('currencyInfo');
+    if (existingInfo) {
+        existingInfo.remove();
+    }
+    
+    // Create currency info section
+    const conversions = currencyInfo.conversions;
+    if (Object.keys(conversions).length === 0) return;
+    
+    const summaryCards = document.querySelector('.summary-cards');
+    const currencyInfoDiv = document.createElement('div');
+    currencyInfoDiv.id = 'currencyInfo';
+    currencyInfoDiv.className = 'currency-info';
+    
+    const conversionsList = Object.entries(conversions)
+        .map(([currency, info]) => `<span class="conversion-item">${currency}: ${info.rate} USD</span>`)
+        .join('');
+    
+    currencyInfoDiv.innerHTML = `
+        <div class="currency-header">
+            <span class="currency-icon">💱</span>
+            <span>Exchange Rates (to USD)</span>
+        </div>
+        <div class="conversions-list">${conversionsList}</div>
+        <div class="currency-note">${currencyInfo.conversion_note}</div>
+    `;
+    
+    summaryCards.insertAdjacentElement('afterend', currencyInfoDiv);
+}
+
+async function generateMLRecommendations() {
+    console.log('Enhanced ML Recommendations button clicked!');
+    
+    // Show loading state
+    const button = event.target;
+    const originalText = button.textContent;
+    button.textContent = 'Loading ML Analysis...';
+    button.disabled = true;
+    
+    try {
+        console.log('Fetching ML recommendations from:', `${API_BASE}/ml-recommendations`);
+        const response = await authenticatedFetch(`${API_BASE}/ml-recommendations`);
+        if (!response || !response.ok) return;
+        const data = await response.json();
+        console.log('ML recommendations response:', data);
+        
+        displayMLRecommendations(data.recommendations);
+        
+        // Show ML features used
+        if (data.features) {
+            const featuresHTML = data.features.map(f => `<li>${f}</li>`).join('');
+            const infoDiv = document.createElement('div');
+            infoDiv.className = 'ml-features-info';
+            infoDiv.innerHTML = `
+                <h3>Enhanced ML Features Used:</h3>
+                <ul>${featuresHTML}</ul>
+            `;
+            document.querySelector('.recommendations').insertAdjacentElement('afterbegin', infoDiv);
+        }
+        
+        console.log('ML recommendations displayed successfully');
+    } catch (error) {
+        console.error('Error generating enhanced ML recommendations:', error);
+        alert('Error generating enhanced ML recommendations: ' + error.message);
+    } finally {
+        // Restore button state
+        button.textContent = originalText;
+        button.disabled = false;
+    }
+}
+
+function displayMLRecommendations(recommendations) {
+    const tbody = document.getElementById('recommendationsBody');
+    tbody.innerHTML = '';
+    
+    // Clear any existing ML features info
+    const existingInfo = document.querySelector('.ml-features-info');
+    if (existingInfo) {
+        existingInfo.remove();
+    }
+    
+    recommendations.forEach(rec => {
+        const row = tbody.insertRow();
+        row.innerHTML = `
+            <td class="ticker">${rec.ticker}</td>
+            <td>$${rec.current_value.toLocaleString()}</td>
+            <td class="${rec.return_percentage >= 0 ? 'positive' : 'negative'}">
+                ${rec.return_percentage.toFixed(1)}%
+            </td>
+            <td>
+                <span class="recommendation ${rec.recommendation.toLowerCase()}">
+                    ${rec.recommendation}
+                </span>
+            </td>
+            <td class="action">${rec.action}</td>
+            <td>
+                ${rec.rationale}
+                <br><small>Confidence: ${rec.confidence}% | ML Score: ${rec.ml_score}</small>
+            </td>
+        `;
+        
+        // Add technical indicators tooltip
+        if (rec.technical_indicators) {
+            const indicators = Object.entries(rec.technical_indicators)
+                .map(([key, value]) => `${key}: ${value}`)
+                .join(' | ');
+            row.title = indicators;
+        }
+    });
+}
+// Toggle add holding form visibility
+function toggleAddHoldingForm() {
+    const form = document.getElementById('addHoldingForm');
+    const btn = document.getElementById('addHoldingBtn');
+    
+    if (form.style.display === 'none' || form.style.display === '') {
+        form.style.display = 'block';
+        btn.textContent = 'Cancel';
+        // Clear form and initialize
+        document.getElementById('holdingForm').reset();
+        initializeTransactionForm();
+    } else {
+        form.style.display = 'none';
+        btn.textContent = 'Add New Transaction';
+    }
+}
+
+// Add new transaction to portfolio
+async function addNewHolding() {
+    const form = document.getElementById('holdingForm');
+    const formData = new FormData(form);
+    
+    // Convert FormData to transaction format
+    const transactionData = {
+        trade_date: formData.get('tradeDate'),
+        ticker: formData.get('ticker').toUpperCase(),
+        exchange: formData.get('exchange'),
+        quantity: parseFloat(formData.get('quantity')) || 0,
+        price: parseFloat(formData.get('price')) || 0,
+        transaction_type: formData.get('transactionType'),
+        currency: formData.get('currency') || 'USD',
+        amount: parseFloat(formData.get('amount')),
+        fees: parseFloat(formData.get('fees')) || 0,
+        transaction_method: formData.get('transactionType') // Use transaction type as method
+    };
+    
+    // Validate required fields
+    if (!transactionData.ticker || !transactionData.trade_date || !transactionData.transaction_type || !transactionData.amount) {
+        alert('Please fill in all required fields (Ticker, Date, Transaction Type, Amount)');
+        return;
+    }
+    
+    // Additional validation for BUY/SELL transactions
+    if (transactionData.transaction_type !== 'DIVIDEND' && (!transactionData.quantity || !transactionData.price)) {
+        alert('For BUY/SELL transactions, Quantity and Price are required');
+        return;
+    }
+    
+    try {
+        console.log('Adding new transaction:', transactionData);
+        
+        const response = await authenticatedFetch(`${API_BASE}/add-transaction`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(transactionData)
+        });
+        
+        if (response && response.ok) {
+            const result = await response.json();
+            console.log('Transaction added successfully:', result);
+            
+            // Show success message
+            alert(`${transactionData.transaction_type} transaction for ${transactionData.ticker} added successfully!`);
+            
+            // Hide form and reset button
+            toggleAddHoldingForm();
+            
+            // Reload portfolio to show updated holdings
+            await loadPortfolio();
+            
+        } else if (response) {
+            const error = await response.json();
+            alert('Error adding transaction: ' + (error.error || 'Unknown error'));
+        }
+        
+    } catch (error) {
+        console.error('Error adding holding:', error);
+        alert('Error adding holding: ' + error.message);
+    }
+}
+
+// Delete holding from portfolio
+async function deleteHolding(ticker) {
+    if (!confirm(`Are you sure you want to delete ${ticker} from your portfolio?`)) {
+        return;
+    }
+    
+    try {
+        const response = await authenticatedFetch(`${API_BASE}/delete-holding/${ticker}`, {
+            method: 'DELETE'
+        });
+        
+        if (response && response.ok) {
+            const result = await response.json();
+            console.log('Holding deleted:', result);
+            alert(`${ticker} removed from portfolio`);
+            
+            // Reload portfolio
+            await loadPortfolio();
+        } else if (response) {
+            const error = await response.json();
+            alert('Error deleting holding: ' + (error.error || 'Unknown error'));
+        }
+        
+    } catch (error) {
+        console.error('Error deleting holding:', error);
+        alert('Error deleting holding: ' + error.message);
+    }
+}
+
+// Clear entire portfolio
+async function clearPortfolio() {
+    if (!confirm('Are you sure you want to clear the entire portfolio? This will delete all holdings.')) {
+        return;
+    }
+    
+    try {
+        const response = await authenticatedFetch(`${API_BASE}/clear-portfolio`, {
+            method: 'POST'
+        });
+        
+        if (response && response.ok) {
+            const result = await response.json();
+            console.log('Portfolio cleared:', result);
+            alert('Portfolio cleared successfully!');
+            
+            // Reload portfolio to show empty state
+            await loadPortfolio();
+        } else if (response) {
+            const error = await response.json();
+            alert('Error clearing portfolio: ' + (error.error || 'Unknown error'));
+        }
+        
+    } catch (error) {
+        console.error('Error clearing portfolio:', error);
+        alert('Error clearing portfolio: ' + error.message);
+    }
+}
+
+// Download sample CSV files
+function downloadSample(type) {
+    const csvContent = type === 'transactions' ? 
+        `Trade date,Instrument code,Market code,Quantity,Price,Transaction type,Currency,Amount,Transaction fee,Transaction method
+2024-01-15,AAPL,NASDAQ,100,150.00,BUY,USD,15000.00,9.95,BUY
+2024-01-20,MSFT,NASDAQ,50,300.00,BUY,USD,15000.00,9.95,BUY
+2024-02-10,AAPL,NASDAQ,50,160.00,BUY,USD,8000.00,9.95,BUY
+2024-02-15,GOOGL,NASDAQ,25,120.00,BUY,USD,3000.00,9.95,BUY
+2024-03-10,AAPL,NASDAQ,25,180.00,SELL,USD,4500.00,9.95,SELL
+2024-03-15,MSFT,NASDAQ,10,320.00,SELL,USD,3200.00,9.95,SELL
+2024-03-20,AAPL,NASDAQ,0,0.00,DIVIDEND,USD,125.00,0.00,DIVIDEND
+2024-03-25,MSFT,NASDAQ,0,0.00,DIVIDEND,USD,80.00,0.00,DIVIDEND
+2024-04-01,GOOGL,NASDAQ,0,0.00,DIVIDEND,USD,25.00,0.00,DIVIDEND
+2024-04-10,TSLA,NASDAQ,30,200.00,BUY,USD,6000.00,9.95,BUY
+2024-04-15,NVDA,NASDAQ,20,450.00,BUY,USD,9000.00,9.95,BUY
+2024-05-01,TSLA,NASDAQ,10,220.00,SELL,USD,2200.00,9.95,SELL` :
+        `Investment ticker symbol,Exchange,Currency,Starting investment dollar value,Ending investment dollar value,Starting share price,Ending share price,Dividends and distributions,Transaction fees
+AAPL,NASDAQ,USD,15000.00,18000.00,150.00,180.00,125.00,19.90
+MSFT,NASDAQ,USD,12000.00,13500.00,300.00,337.50,80.00,19.90
+GOOGL,NASDAQ,USD,3000.00,3500.00,120.00,140.00,25.00,9.95
+TSLA,NASDAQ,USD,4000.00,4400.00,200.00,220.00,0.00,19.90
+NVDA,NASDAQ,USD,9000.00,10800.00,450.00,540.00,0.00,9.95`;
+
+    const filename = type === 'transactions' ? 'sample_transactions.csv' : 'sample_portfolio.csv';
+    
+    // Create and download file
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+    
+    // Show success message
+    showAlert(`Downloaded ${filename} successfully!`, 'success');
+}
+
+// Handle transaction form field visibility
+function toggleTransactionFields() {
+    const transactionType = document.getElementById('transactionType').value;
+    const shareFields = document.getElementById('shareFields');
+    const quantityField = document.getElementById('quantity');
+    const priceField = document.getElementById('price');
+    
+    if (transactionType === 'DIVIDEND') {
+        // Hide share fields for dividends
+        shareFields.style.display = 'none';
+        quantityField.required = false;
+        priceField.required = false;
+        quantityField.value = '0';
+        priceField.value = '0';
+    } else {
+        // Show share fields for BUY/SELL
+        shareFields.style.display = 'flex';
+        quantityField.required = true;
+        priceField.required = true;
+    }
+}
+
+// Set default date to today
+function initializeTransactionForm() {
+    const dateField = document.getElementById('tradeDate');
+    if (dateField) {
+        const today = new Date().toISOString().split('T')[0];
+        dateField.value = today;
+    }
+    toggleTransactionFields(); // Initialize field visibility
+}
+
+// Make functions globally available
+window.fetchMarketData = fetchMarketData;
+window.exportData = exportData;
+window.generateMLRecommendations = generateMLRecommendations;
+window.toggleAddHoldingForm = toggleAddHoldingForm;
+window.addNewHolding = addNewHolding;
+window.deleteHolding = deleteHolding;
+window.downloadSample = downloadSample;
+window.clearPortfolio = clearPortfolio;
+window.toggleTransactionFields = toggleTransactionFields;

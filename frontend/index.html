@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Portfolio Analyzer</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Portfolio Analysis Dashboard</h1>
+            <div class="last-update">Last updated: <span id="lastUpdate">-</span></div>
+        </header>
+        
+        <!-- Control Panel -->
+        <section class="controls">
+            <input type="file" id="csvFile" accept=".csv" style="display: none;">
+            <button onclick="document.getElementById('csvFile').click()">
+                Upload Portfolio CSV
+            </button>
+            <div class="sample-downloads">
+                <button onclick="downloadSample('transactions')" class="sample-link" title="Best format for accurate cost basis and returns calculation">
+                    📄 Download Transaction Template (Recommended)
+                </button>
+                <button onclick="downloadSample('portfolio')" class="sample-link" title="Simple portfolio format for basic analysis">
+                    📄 Download Portfolio Template (Basic)
+                </button>
+                <div class="format-info">
+                    💡 <strong>Transaction format</strong> provides the most accurate analysis with proper cost basis calculation
+                </div>
+            </div>
+            <button onclick="toggleAddHoldingForm()" id="addHoldingBtn">
+                Add New Transaction
+            </button>
+            <button onclick="fetchMarketData()">
+                <span id="marketDataBtn">Fetch Market Data</span>
+            </button>
+            <button onclick="generateMLRecommendations()" id="mlRecommendationsBtn">
+                Enhanced ML Recommendations
+            </button>
+            <button onclick="exportData()">
+                Export Analysis
+            </button>
+            <button onclick="clearPortfolio()" style="background: linear-gradient(45deg, #ff6b6b, #ee5a52);">
+                Clear Portfolio
+            </button>
+        </section>
+        
+        <!-- Add Holding Form -->
+        <section class="add-holding-form" id="addHoldingForm" style="display: none;">
+            <h2>Add New Transaction</h2>
+            <form id="holdingForm">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ticker">Ticker Symbol *</label>
+                        <input type="text" id="ticker" name="ticker" placeholder="e.g., AAPL" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="exchange">Exchange</label>
+                        <select id="exchange" name="exchange">
+                            <option value="NASDAQ">NASDAQ</option>
+                            <option value="NYSE">NYSE</option>
+                            <option value="AMEX">AMEX</option>
+                            <option value="LSE">London Stock Exchange</option>
+                            <option value="TSE">Tokyo Stock Exchange</option>
+                            <option value="OTHER">Other</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="transactionType">Transaction Type *</label>
+                        <select id="transactionType" name="transactionType" required onchange="toggleTransactionFields()">
+                            <option value="BUY">BUY - Purchase shares</option>
+                            <option value="SELL">SELL - Sell shares</option>
+                            <option value="DIVIDEND">DIVIDEND - Dividend payment</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="tradeDate">Trade Date *</label>
+                        <input type="date" id="tradeDate" name="tradeDate" required>
+                    </div>
+                </div>
+                
+                <div class="form-row" id="shareFields">
+                    <div class="form-group">
+                        <label for="quantity">Quantity (Shares) *</label>
+                        <input type="number" id="quantity" name="quantity" step="0.001" placeholder="100" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="price">Price per Share *</label>
+                        <input type="number" id="price" name="price" step="0.01" placeholder="150.00" required>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="amount">Total Amount *</label>
+                        <input type="number" id="amount" name="amount" step="0.01" placeholder="15000.00" required>
+                        <small>Total transaction value (quantity × price)</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="fees">Transaction Fee</label>
+                        <input type="number" id="fees" name="fees" step="0.01" placeholder="9.95" value="0">
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="currency">Currency</label>
+                        <select id="currency" name="currency">
+                            <option value="USD">USD - US Dollar</option>
+                            <option value="EUR">EUR - Euro</option>
+                            <option value="GBP">GBP - British Pound</option>
+                            <option value="JPY">JPY - Japanese Yen</option>
+                            <option value="CAD">CAD - Canadian Dollar</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="conversionNote" style="font-size: 0.8em; color: #888;">
+                            📊 Will be converted to USD for analysis
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary">Add Transaction</button>
+                    <button type="button" onclick="toggleAddHoldingForm()" class="btn-secondary">Cancel</button>
+                </div>
+            </form>
+        </section>
+        
+        <!-- Current Holdings Management -->
+        <section class="holdings-management" id="holdingsManagement" style="display: none;">
+            <h2>Current Holdings</h2>
+            <div class="holdings-list" id="holdingsList">
+                <p>No holdings found. Add your first holding using the form above.</p>
+            </div>
+        </section>
+        
+        <!-- Summary Cards -->
+        <section class="summary-cards">
+            <div class="card">
+                <h3>Total Value</h3>
+                <div class="value" id="totalValue">$0</div>
+            </div>
+            <div class="card">
+                <h3>Total Return</h3>
+                <div class="value" id="totalReturn">$0</div>
+            </div>
+            <div class="card">
+                <h3>Return %</h3>
+                <div class="value" id="returnPct">0%</div>
+            </div>
+            <div class="card">
+                <h3>Holdings</h3>
+                <div class="value" id="holdingsCount">0</div>
+            </div>
+        </section>
+        
+        <!-- Recommendations Table -->
+        <section class="recommendations">
+            <h2>Enhanced ML Recommendations</h2>
+            <table id="recommendationsTable">
+                <thead>
+                    <tr>
+                        <th>Ticker</th>
+                        <th>Value</th>
+                        <th>Return</th>
+                        <th>Recommendation</th>
+                        <th>Action</th>
+                        <th>Rationale</th>
+                    </tr>
+                </thead>
+                <tbody id="recommendationsBody">
+                    <tr><td colspan="6">Upload portfolio and click "Enhanced ML Recommendations"</td></tr>
+                </tbody>
+            </table>
+        </section>
+        
+        <!-- Charts -->
+        <section class="charts">
+            <div class="chart-container">
+                <h2>Portfolio Allocation</h2>
+                <canvas id="allocationChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <h2>Performance by Stock</h2>
+                <canvas id="performanceChart"></canvas>
+            </div>
+        </section>
+    </div>
+    
+    <script src="js/app.js"></script>
+</body>
+</html>
