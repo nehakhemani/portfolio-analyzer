@@ -300,6 +300,9 @@ def upload_test():
 def upload_portfolio():
     """Upload new portfolio CSV"""
     try:
+        # Ensure database is initialized before upload
+        init_db()
+        print("Database initialized before upload")
         print("Upload endpoint called")
         print(f"Request files: {list(request.files.keys())}")
         print(f"Request form: {list(request.form.keys())}")
