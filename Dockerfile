@@ -1,22 +1,29 @@
- 
- FROM python:3.10-slim
+FROM python:3.10-slim
 
-  WORKDIR /app
+WORKDIR /app
 
-  ENV PYTHONDONTWRITEBYTECODE=1
-  ENV PYTHONUNBUFFERED=1
-  ENV PORT=8080
-  
-  RUN apt-get update && apt-get install -y gcc && rm -rf /var/lib/apt/lists/*
-  
-  COPY requirements.txt .
-  RUN pip install --no-cache-dir -r requirements.txt
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app:/app/backend
+ENV PORT=8080
 
-  COPY . .
-  RUN mkdir -p uploads backend/data
+# Install system dependencies
+RUN apt-get update && apt-get install -y gcc && rm -rf /var/lib/apt/lists/*
 
-  EXPOSE $PORT
+# Copy and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-  # Use main.py as entry point
-  CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 main:applicationn --bind :$PORT --workers 1 --threads 8 --timeout 0 --pythonpath /app/backend
-backend.app:app
+# Copy application code
+COPY . .
+
+# Create necessary directories
+RUN mkdir -p uploads backend/data
+
+# Expose port
+EXPOSE 8080
+
+# Start the application
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "0",
+"--chdir", "/app/backend", "app:app"]
