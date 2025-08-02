@@ -25,5 +25,5 @@ RUN mkdir -p uploads backend/data
 EXPOSE 8080
 
 # Start the application
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "0",
-"--chdir", "/app/backend", "app:app"]
+WORKDIR /app/backend
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "0","app:app"]
