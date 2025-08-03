@@ -157,6 +157,9 @@ async function loadPortfolio() {
         if (response && response.ok) {
             const data = await response.json();
             console.log('Portfolio loaded:', data);
+            console.log('Portfolio summary:', data.summary);
+            console.log('Portfolio currency_info:', data.currency_info);
+            console.log('Portfolio holdings count:', data.holdings ? data.holdings.length : 'NO HOLDINGS');
             currentPortfolio = data;
             updateUI();
         }
@@ -196,7 +199,9 @@ async function uploadPortfolio(file) {
         if (response && response.ok) {
             const data = await response.json();
             console.log('Upload response data:', data);
-            alert(`Portfolio uploaded successfully! Added ${data.holdings_count} holdings.`);
+            console.log('transaction_count value:', data.transaction_count);
+            console.log('transaction_count type:', typeof data.transaction_count);
+            alert(`Transaction data uploaded successfully! Added ${data.transaction_count || 'UNDEFINED'} transactions.`);
             loadPortfolio();
         } else if (response) {
             // Check if response is HTML instead of JSON
@@ -239,21 +244,24 @@ async function uploadPortfolio(file) {
 async function fetchMarketData() {
     console.log('Fetching market data...');
     const btn = document.getElementById('marketDataBtn');
-    btn.textContent = 'Fetching...';
+    btn.textContent = 'Fetching Live Prices...';
+    btn.disabled = true;
     
     try {
         const response = await authenticatedFetch(`${API_BASE}/market-data`);
         if (response && response.ok) {
             const data = await response.json();
             console.log('Market data response:', data);
-            alert('Market data updated!');
-            loadPortfolio();
+            alert(`Market data updated! Updated ${data.updated_holdings} holdings with live prices.`);
+            // Reload portfolio to show updated prices and returns
+            await loadPortfolio();
         }
     } catch (error) {
         console.error('Market data error:', error);
         alert('Error fetching market data: ' + error.message);
     } finally {
         btn.textContent = 'Fetch Market Data';
+        btn.disabled = false;
     }
 }
 
@@ -276,13 +284,15 @@ function updateUI() {
     
     // Update summary (always in USD)
     const summary = currentPortfolio.summary;
-    document.getElementById('totalValue').textContent = `$${summary.total_value.toLocaleString()} USD`;
+    document.getElementById('totalValue').textContent = `$${(summary.total_value || summary.total_current_value || 0).toLocaleString()} USD`;
     document.getElementById('totalReturn').textContent = `$${summary.total_return.toLocaleString()} USD`;
     document.getElementById('returnPct').textContent = `${summary.return_percentage.toFixed(2)}%`;
     document.getElementById('holdingsCount').textContent = summary.holdings_count;
     
     // Show currency conversion info if available
-    if (currentPortfolio.currency_info && Object.keys(currentPortfolio.currency_info.conversions).length > 0) {
+    if (currentPortfolio.currency_info && 
+        currentPortfolio.currency_info.conversions && 
+        Object.keys(currentPortfolio.currency_info.conversions).length > 0) {
         updateCurrencyInfo(currentPortfolio.currency_info);
     }
     
@@ -313,7 +323,7 @@ function updateCharts() {
     }
     
    // Allocation Chart - Filter out zero/negative value holdings
-    const holdings = currentPortfolio.holdings.filter(h => h.end_value > 0);
+    const holdings = currentPortfolio.holdings.filter(h => h.current_value > 0);
     
     if (holdings.length > 0) {
         const allocationCtx = document.getElementById('allocationChart');
@@ -323,7 +333,7 @@ function updateCharts() {
                 data: {
                     labels: holdings.map(h => h.ticker),
                     datasets: [{
-                        data: holdings.map(h => h.end_value),
+                        data: holdings.map(h => h.current_value),
                         backgroundColor: generateColors(holdings.length)
                     }]
                 },
@@ -344,13 +354,13 @@ function updateCharts() {
     }
     
     // Performance Chart - Only show holdings with value
-    const validHoldingsForChart = currentPortfolio.holdings.filter(h => h.end_value > 0);
+    const validHoldingsForChart = currentPortfolio.holdings.filter(h => h.current_value > 0);
     if (validHoldingsForChart.length > 0) {
         const performanceCtx = document.getElementById('performanceChart');
         if (performanceCtx) {
             const returns = validHoldingsForChart.map(h => {
-                return h.start_value > 0 ? 
-                    ((h.end_value - h.start_value) / h.start_value * 100) : 0;
+                return h.cost_basis > 0 ? 
+                    ((h.current_value - h.cost_basis) / h.cost_basis * 100) : 0;
             });
             
             window.performanceChart = new Chart(performanceCtx.getContext('2d'), {
@@ -417,7 +427,7 @@ function updateHoldingsManagement() {
     }
     
     // Filter out holdings with zero or negative values
-    const validHoldings = currentPortfolio.holdings.filter(h => h.end_value > 0);
+    const validHoldings = currentPortfolio.holdings.filter(h => h.current_value > 0);
     
     if (validHoldings.length === 0) {
         document.getElementById('holdingsManagement').style.display = 'none';
@@ -437,7 +447,10 @@ function updateHoldingsManagement() {
                     <th>Ticker</th>
                     <th>Exchange</th>
                     <th>Currency</th>
-                    <th>Initial Value</th>
+                    <th>Quantity</th>
+                    <th>Avg Cost</th>
+                    <th>Cost Basis</th>
+                    <th>Current Price</th>
                     <th>Current Value</th>
                     <th>Return</th>
                     <th>Return %</th>
@@ -446,17 +459,19 @@ function updateHoldingsManagement() {
             </thead>
             <tbody>
                 ${validHoldings.map(holding => {
-                    const returnAmount = holding.end_value - holding.start_value;
-                    const returnPct = holding.start_value > 0 ? 
-                        ((holding.end_value - holding.start_value) / holding.start_value * 100) : 0;
+                    const returnAmount = holding.total_return;
+                    const returnPct = holding.return_percentage;
                     
                     return `
                         <tr>
                             <td class="ticker">${holding.ticker}</td>
                             <td>${holding.exchange || 'N/A'}</td>
                             <td><span class="currency-badge">${holding.currency || 'USD'}</span></td>
-                            <td>${formatCurrency(holding.start_value, holding.currency)}</td>
-                            <td>${formatCurrency(holding.end_value, holding.currency)}</td>
+                            <td>${holding.quantity.toFixed(4)}</td>
+                            <td>${formatCurrency(holding.avg_cost, holding.currency)}</td>
+                            <td>${formatCurrency(holding.cost_basis, holding.currency)}</td>
+                            <td>${formatCurrency(holding.current_price, holding.currency)}</td>
+                            <td>${formatCurrency(holding.current_value, holding.currency)}</td>
                             <td class="${returnAmount >= 0 ? 'positive' : 'negative'}">
                                 ${formatCurrency(returnAmount, holding.currency)}
                             </td>
@@ -564,41 +579,120 @@ function updateCurrencyInfo(currencyInfo) {
 }
 
 async function generateMLRecommendations() {
-    console.log('Enhanced ML Recommendations button clicked!');
+    console.log('Statistical ML Recommendations button clicked!');
     
     // Show loading state
     const button = event.target;
     const originalText = button.textContent;
-    button.textContent = 'Loading ML Analysis...';
+    button.textContent = 'Loading Statistical Analysis...';
     button.disabled = true;
     
+    // Remove previous analysis info
+    const existingInfo = document.querySelector('.ml-features-info');
+    if (existingInfo) {
+        existingInfo.remove();
+    }
+    
+    // Update info section
+    const infoDiv = document.getElementById('recommendationInfo');
+    if (infoDiv) {
+        infoDiv.innerHTML = `
+            <strong>📊 Statistical ML Analysis</strong> - Using portfolio performance data, smart statistical modeling, and ticker-specific intelligence. Fast and reliable without external data dependencies.
+        `;
+        infoDiv.style.borderColor = '#4f46e5';
+        infoDiv.style.background = 'rgba(79, 70, 229, 0.1)';
+    }
+    
     try {
-        console.log('Fetching ML recommendations from:', `${API_BASE}/ml-recommendations`);
+        console.log('Fetching statistical ML recommendations from:', `${API_BASE}/ml-recommendations`);
         const response = await authenticatedFetch(`${API_BASE}/ml-recommendations`);
         if (!response || !response.ok) return;
         const data = await response.json();
-        console.log('ML recommendations response:', data);
+        console.log('Statistical ML recommendations response:', data);
         
         displayMLRecommendations(data.recommendations);
         
-        // Show ML features used
+        // Show statistical features used
         if (data.features) {
             const featuresHTML = data.features.map(f => `<li>${f}</li>`).join('');
-            const infoDiv = document.createElement('div');
-            infoDiv.className = 'ml-features-info';
-            infoDiv.innerHTML = `
-                <h3>Enhanced ML Features Used:</h3>
+            const featuresDiv = document.createElement('div');
+            featuresDiv.className = 'ml-features-info';
+            featuresDiv.style.borderColor = '#4f46e5';
+            featuresDiv.innerHTML = `
+                <h3>📊 Statistical ML Features Used:</h3>
                 <ul>${featuresHTML}</ul>
+                <p style="color: #4f46e5; font-size: 0.9em; margin-top: 10px;">
+                    <strong>Data Sources:</strong> Portfolio performance, statistical models, ticker profiles, and smart estimations. No external API dependencies.
+                </p>
             `;
-            document.querySelector('.recommendations').insertAdjacentElement('afterbegin', infoDiv);
+            document.querySelector('.recommendations').insertAdjacentElement('afterbegin', featuresDiv);
         }
         
-        console.log('ML recommendations displayed successfully');
+        console.log('Statistical ML recommendations displayed successfully');
     } catch (error) {
-        console.error('Error generating enhanced ML recommendations:', error);
-        alert('Error generating enhanced ML recommendations: ' + error.message);
+        console.error('Error generating statistical ML recommendations:', error);
+        alert('Error generating statistical ML recommendations: ' + error.message);
     } finally {
         // Restore button state
+        button.textContent = originalText;
+        button.disabled = false;
+    }
+}
+
+// Generate ML recommendations with live market data
+async function generateLiveMLRecommendations(event) {
+    if (!event) event = { target: document.getElementById('liveMLRecommendationsBtn') };
+    const button = event.target;
+    const originalText = button.textContent;
+    button.textContent = 'Loading Live Data + ML...';
+    button.disabled = true;
+    
+    // Remove previous analysis info
+    const existingInfo = document.querySelector('.ml-features-info');
+    if (existingInfo) {
+        existingInfo.remove();
+    }
+    
+    // Update info section
+    const infoDiv = document.getElementById('recommendationInfo');
+    if (infoDiv) {
+        infoDiv.innerHTML = `
+            <strong>🔴 Live Data + ML Analysis</strong> - Using real-time market data, news sentiment, social media trends, and advanced ML models. This may take longer due to data fetching...
+        `;
+        infoDiv.style.borderColor = '#dc2626';
+        infoDiv.style.background = 'rgba(220, 38, 38, 0.1)';
+    }
+    
+    try {
+        console.log('Fetching live ML recommendations from:', `${API_BASE}/live-ml-recommendations`);
+        const response = await authenticatedFetch(`${API_BASE}/live-ml-recommendations`);
+        if (!response || !response.ok) return;
+        const data = await response.json();
+        console.log('Live ML recommendations response:', data);
+        
+        displayMLRecommendations(data.recommendations);
+        
+        // Show enhanced features used
+        if (data.features) {
+            const featuresHTML = data.features.map(f => `<li>${f}</li>`).join('');
+            const featuresDiv = document.createElement('div');
+            featuresDiv.className = 'ml-features-info';
+            featuresDiv.style.borderColor = '#dc2626';
+            featuresDiv.innerHTML = `
+                <h3>🔴 Live Data + ML Features Used:</h3>
+                <ul>${featuresHTML}</ul>
+                <p style="color: #dc2626; font-size: 0.9em; margin-top: 10px;">
+                    <strong>Live Data Sources:</strong> Real-time market data, news sentiment analysis, social media trends, analyst recommendations, and market indicators.
+                </p>
+            `;
+            document.querySelector('.recommendations').insertAdjacentElement('afterbegin', featuresDiv);
+        }
+        
+        console.log('Live ML recommendations displayed successfully');
+    } catch (error) {
+        console.error('Error generating live ML recommendations:', error);
+        alert('Error generating live ML recommendations: ' + error.message);
+    } finally {
         button.textContent = originalText;
         button.disabled = false;
     }
@@ -618,9 +712,9 @@ function displayMLRecommendations(recommendations) {
         const row = tbody.insertRow();
         row.innerHTML = `
             <td class="ticker">${rec.ticker}</td>
-            <td>$${rec.current_value.toLocaleString()}</td>
-            <td class="${rec.return_percentage >= 0 ? 'positive' : 'negative'}">
-                ${rec.return_percentage.toFixed(1)}%
+            <td>$${(rec.current_value || 0).toLocaleString()}</td>
+            <td class="${(rec.return_percentage || 0) >= 0 ? 'positive' : 'negative'}">
+                ${(rec.return_percentage || 0).toFixed(1)}%
             </td>
             <td>
                 <span class="recommendation ${rec.recommendation.toLowerCase()}">
@@ -861,6 +955,7 @@ function initializeTransactionForm() {
 window.fetchMarketData = fetchMarketData;
 window.exportData = exportData;
 window.generateMLRecommendations = generateMLRecommendations;
+window.generateLiveMLRecommendations = generateLiveMLRecommendations;
 window.toggleAddHoldingForm = toggleAddHoldingForm;
 window.addNewHolding = addNewHolding;
 window.deleteHolding = deleteHolding;

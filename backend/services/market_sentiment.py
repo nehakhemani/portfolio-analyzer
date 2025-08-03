@@ -94,7 +94,7 @@ class MarketSentimentAnalyzer:
             self.reddit_enabled = False
     
     def get_news_sentiment(self, ticker: str) -> Dict:
-        """Analyze news sentiment for a stock"""
+        """Analyze news sentiment for a stock with enhanced time-weighting"""
         try:
             # Get recent news from Yahoo Finance
             stock = yf.Ticker(ticker)
@@ -106,16 +106,21 @@ class MarketSentimentAnalyzer:
                     'articles_count': 0,
                     'positive_count': 0,
                     'negative_count': 0,
-                    'recent_headlines': []
+                    'recent_headlines': [],
+                    'weighted_score': 0,
+                    'sentiment_velocity': 0
                 }
             
-            # Analyze sentiment of headlines and summaries
+            # Analyze sentiment of headlines and summaries with time weighting
             sentiments = []
+            weighted_sentiments = []
             headlines = []
+            current_time = time.time()
             
-            for article in news[:10]:  # Analyze recent 10 articles
+            for article in news[:15]:  # Analyze more articles for better accuracy
                 title = article.get('title', '')
                 summary = article.get('summary', '')
+                published_time = article.get('providerPublishTime', current_time)
                 
                 # Combine title and summary for analysis
                 text = f"{title}. {summary}"
@@ -123,28 +128,51 @@ class MarketSentimentAnalyzer:
                 if text.strip():
                     blob = TextBlob(text)
                     sentiment_score = blob.sentiment.polarity
+                    
+                    # Calculate time decay weight (exponential decay)
+                    hours_old = (current_time - published_time) / 3600
+                    time_weight = np.exp(-0.05 * hours_old)  # Decay over time
+                    
+                    # Apply source credibility weight (simple heuristic)
+                    credibility_weight = self._get_source_credibility_weight(article)
+                    
+                    # Combined weight
+                    total_weight = time_weight * credibility_weight
+                    weighted_sentiment = sentiment_score * total_weight
+                    
                     sentiments.append(sentiment_score)
+                    weighted_sentiments.append(weighted_sentiment)
                     headlines.append({
                         'title': title,
                         'sentiment': sentiment_score,
-                        'published': article.get('providerPublishTime', 0)
+                        'published': published_time,
+                        'weight': total_weight,
+                        'hours_old': hours_old
                     })
             
             if sentiments:
                 avg_sentiment = np.mean(sentiments)
+                weighted_avg_sentiment = np.sum(weighted_sentiments) / np.sum([h['weight'] for h in headlines])
                 positive_count = sum(1 for s in sentiments if s > 0.1)
                 negative_count = sum(1 for s in sentiments if s < -0.1)
+                
+                # Calculate sentiment velocity (rate of change)
+                sentiment_velocity = self._calculate_sentiment_velocity(headlines)
             else:
                 avg_sentiment = 0
+                weighted_avg_sentiment = 0
                 positive_count = 0
                 negative_count = 0
+                sentiment_velocity = 0
             
             return {
                 'score': avg_sentiment,
+                'weighted_score': weighted_avg_sentiment,
                 'articles_count': len(sentiments),
                 'positive_count': positive_count,
                 'negative_count': negative_count,
-                'recent_headlines': headlines[:5]
+                'recent_headlines': sorted(headlines, key=lambda x: x['published'], reverse=True)[:5],
+                'sentiment_velocity': sentiment_velocity
             }
             
         except Exception as e:
@@ -513,3 +541,42 @@ class MarketSentimentAnalyzer:
         summary_parts.append(f"Market regime: {market['market_regime']} (VIX: {market['vix_level']:.1f})")
         
         return "; ".join(summary_parts) if summary_parts else "Neutral sentiment across all sources"
+    
+    def _get_source_credibility_weight(self, article: dict) -> float:
+        """Assign credibility weight based on news source"""
+        source = article.get('publisher', '').lower()
+        
+        # High credibility sources
+        high_credibility = ['reuters', 'bloomberg', 'wsj', 'financial times', 'marketwatch', 'cnbc']
+        # Medium credibility sources  
+        medium_credibility = ['yahoo finance', 'seeking alpha', 'motley fool', 'benzinga']
+        # Low credibility (default)
+        
+        if any(trusted in source for trusted in high_credibility):
+            return 1.2  # 20% boost for trusted sources
+        elif any(medium in source for medium in medium_credibility):
+            return 1.0  # Normal weight
+        else:
+            return 0.8  # Slight discount for unknown sources
+    
+    def _calculate_sentiment_velocity(self, headlines: list) -> float:
+        """Calculate rate of sentiment change over time"""
+        if len(headlines) < 3:
+            return 0
+        
+        # Sort by publication time
+        sorted_headlines = sorted(headlines, key=lambda x: x['published'])
+        
+        # Calculate sentiment trend using linear regression
+        times = [h['published'] for h in sorted_headlines]
+        sentiments = [h['sentiment'] for h in sorted_headlines]
+        
+        if len(times) > 1:
+            # Simple slope calculation
+            time_span = (times[-1] - times[0]) / 3600  # Convert to hours
+            if time_span > 0:
+                sentiment_change = sentiments[-1] - sentiments[0]
+                velocity = sentiment_change / time_span  # Sentiment change per hour
+                return velocity
+        
+        return 0

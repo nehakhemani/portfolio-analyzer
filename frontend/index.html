@@ -19,17 +19,14 @@
         <section class="controls">
             <input type="file" id="csvFile" accept=".csv" style="display: none;">
             <button onclick="document.getElementById('csvFile').click()">
-                Upload Portfolio CSV
+                Upload Transaction CSV
             </button>
             <div class="sample-downloads">
-                <button onclick="downloadSample('transactions')" class="sample-link" title="Best format for accurate cost basis and returns calculation">
-                    📄 Download Transaction Template (Recommended)
-                </button>
-                <button onclick="downloadSample('portfolio')" class="sample-link" title="Simple portfolio format for basic analysis">
-                    📄 Download Portfolio Template (Basic)
+                <button onclick="downloadSample('transactions')" class="sample-link" title="Download CSV template for transaction data upload">
+                    📄 Download Transaction CSV Template
                 </button>
                 <div class="format-info">
-                    💡 <strong>Transaction format</strong> provides the most accurate analysis with proper cost basis calculation
+                    💡 Upload your transaction history (BUY/SELL records) for accurate portfolio calculation
                 </div>
             </div>
             <button onclick="toggleAddHoldingForm()" id="addHoldingBtn">
@@ -38,8 +35,11 @@
             <button onclick="fetchMarketData()">
                 <span id="marketDataBtn">Fetch Market Data</span>
             </button>
-            <button onclick="generateMLRecommendations()" id="mlRecommendationsBtn">
-                Enhanced ML Recommendations
+            <button onclick="generateMLRecommendations()" id="mlRecommendationsBtn" class="btn-statistical">
+                📊 Statistical ML Analysis
+            </button>
+            <button onclick="generateLiveMLRecommendations()" id="liveMLRecommendationsBtn" class="btn-live">
+                🔴 Live Data + ML Analysis
             </button>
             <button onclick="exportData()">
                 Export Analysis
@@ -164,7 +164,10 @@
         
         <!-- Recommendations Table -->
         <section class="recommendations">
-            <h2>Enhanced ML Recommendations</h2>
+            <h2>ML Recommendations</h2>
+            <div class="recommendation-info" id="recommendationInfo" style="margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-left: 4px solid #007bff; font-size: 14px;">
+                Choose your analysis method: <strong>Statistical ML</strong> uses transaction-based portfolio analysis and smart modeling, or <strong>Live Data + ML</strong> includes real market sentiment and news.
+            </div>
             <table id="recommendationsTable">
                 <thead>
                     <tr>
@@ -177,7 +180,7 @@
                     </tr>
                 </thead>
                 <tbody id="recommendationsBody">
-                    <tr><td colspan="6">Upload portfolio and click "Enhanced ML Recommendations"</td></tr>
+                    <tr><td colspan="6">Upload portfolio and choose your ML analysis method above</td></tr>
                 </tbody>
             </table>
         </section>
