@@ -857,18 +857,47 @@ def add_single_transaction():
 def clear_portfolio():
     """Clear all holdings from portfolio"""
     try:
+        print("=== CLEAR PORTFOLIO REQUEST ===")
+        print(f"Database path: {app.config['DATABASE']}")
+        
         conn = sqlite3.connect(app.config['DATABASE'])
         cursor = conn.cursor()
+        
+        # Check current holdings count
+        cursor.execute("SELECT COUNT(*) FROM holdings")
+        count_before = cursor.fetchone()[0]
+        print(f"Holdings before clear: {count_before}")
+        
+        # Clear holdings
         cursor.execute("DELETE FROM holdings")
+        affected_rows = cursor.rowcount
+        print(f"Rows deleted: {affected_rows}")
+        
         conn.commit()
+        
+        # Verify clearing
+        cursor.execute("SELECT COUNT(*) FROM holdings")
+        count_after = cursor.fetchone()[0]
+        print(f"Holdings after clear: {count_after}")
+        
         conn.close()
         
         # Clear the portfolio_loaded flag
         session.pop('portfolio_loaded', None)
         
-        return jsonify({'message': 'Portfolio cleared successfully'})
+        print("Portfolio cleared successfully")
+        return jsonify({
+            'message': 'Portfolio cleared successfully',
+            'rows_deleted': affected_rows,
+            'holdings_before': count_before,
+            'holdings_after': count_after
+        })
         
     except Exception as e:
+        print(f"Error clearing portfolio: {str(e)}")
+        print(f"Error type: {type(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 400
 
 @app.route('/api/delete-holding/<ticker>', methods=['DELETE'])
