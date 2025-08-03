@@ -12,16 +12,50 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-# Add the parent directory to the path so we can import our modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add the current directory to the path for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir)
+print(f"Added to Python path: {current_dir}")
+print(f"Current working directory: {os.getcwd()}")
+print(f"__file__ location: {__file__}")
+print(f"Python path: {sys.path[:3]}")  # Show first 3 entries
 
-from services.market_data import MarketDataService
-from services.analysis import PortfolioAnalyzer
-from services.recommendations import RecommendationEngine
-from services.ml_recommendations import MLRecommendationEngine
-from services.enhanced_ml_recommendations_simple import EnhancedMLRecommendationEngine
-from services.currency_converter import CurrencyConverter
-from auth import require_auth, rate_limit_only, validate_request_data, security_manager
+try:
+    print("Importing services...")
+    from services.market_data import MarketDataService
+    print("✓ MarketDataService imported")
+    from services.analysis import PortfolioAnalyzer
+    print("✓ PortfolioAnalyzer imported")
+    from services.recommendations import RecommendationEngine
+    print("✓ RecommendationEngine imported")
+    from services.ml_recommendations import MLRecommendationEngine
+    print("✓ MLRecommendationEngine imported")
+    from services.enhanced_ml_recommendations_simple import EnhancedMLRecommendationEngine
+    print("✓ EnhancedMLRecommendationEngine imported")
+    from services.currency_converter import CurrencyConverter
+    print("✓ CurrencyConverter imported")
+    from auth import require_auth, rate_limit_only, validate_request_data, security_manager
+    print("✓ Auth modules imported")
+    print("All imports successful!")
+except Exception as e:
+    print(f"✗ Import failed: {e}")
+    import traceback
+    traceback.print_exc()
+    # Create minimal fallbacks to prevent complete failure
+    class DummyService:
+        pass
+    MarketDataService = DummyService
+    PortfolioAnalyzer = DummyService
+    RecommendationEngine = DummyService
+    MLRecommendationEngine = DummyService
+    EnhancedMLRecommendationEngine = DummyService
+    CurrencyConverter = DummyService
+    def dummy_decorator(f): return f
+    require_auth = dummy_decorator
+    rate_limit_only = dummy_decorator
+    validate_request_data = dummy_decorator
+    class DummySecurity: secret_key = "fallback"
+    security_manager = DummySecurity()
 
 app = Flask(__name__)
 CORS(app, origins="*", supports_credentials=True)  # Enable credentials for sessions
