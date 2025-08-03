@@ -58,8 +58,21 @@ currency_converter = CurrencyConverter()
 # Initialize database
 def init_db():
     """Initialize SQLite database with portfolio tables"""
-    # Create data directory if it doesn't exist
-    os.makedirs('data', exist_ok=True)
+    try:
+        # Create data directory if it doesn't exist
+        os.makedirs('data', exist_ok=True)
+        print(f"Data directory created/verified: {os.path.abspath('data')}")
+    except Exception as e:
+        print(f"Error creating data directory: {e}")
+        # Try alternative location
+        try:
+            os.makedirs('/tmp/data', exist_ok=True)
+            app.config['DATABASE'] = '/tmp/data/portfolio.db'
+            print(f"Using temporary database location: {app.config['DATABASE']}")
+        except Exception as e2:
+            print(f"Error creating temp directory: {e2}")
+            app.config['DATABASE'] = ':memory:'
+            print("Using in-memory database")
     
     conn = sqlite3.connect(app.config['DATABASE'])
     cursor = conn.cursor()
@@ -152,6 +165,16 @@ def logout():
     """Logout endpoint"""
     session.clear()
     return jsonify({'success': True, 'message': 'Logged out successfully'})
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Public health check endpoint for cloud deployment"""
+    return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()}), 200
+
+@app.route('/api/status', methods=['GET'])
+def api_status():
+    """API status check without authentication"""
+    return jsonify({'status': 'Portfolio Analyzer API is running', 'version': '2.0'}), 200
 
 @app.route('/api/check-auth', methods=['GET'])
 def check_auth():
@@ -885,16 +908,20 @@ print("\nRegistered routes:")
 for rule in app.url_map.iter_rules():
     print(f"{rule.endpoint}: {rule.rule}")
 
+# Initialize database on startup (not just in main)
+try:
+    print("Initializing database on module load...")
+    init_db()
+    print("✓ Database initialized successfully")
+except Exception as e:
+    print(f"✗ Database initialization failed: {e}")
+
 if __name__ == '__main__':
     print("\n" + "="*50)
     print("Portfolio Analyzer Starting...")
     print("="*50)
     
-    # Initialize database
-    init_db()
-    print("+ Database initialized")
-    
-    # Get port from environment (Replit sets this) or default to 5001
+    # Get port from environment (Cloud Run sets this) or default to 8080
     port = int(os.environ.get('PORT', 8080))
     
     print(f"+ Server starting on port {port}")
@@ -902,3 +929,7 @@ if __name__ == '__main__':
     print("="*50 + "\n")
     
     app.run(debug=False, host='0.0.0.0', port=port)
+else:
+    print("Portfolio Analyzer loaded as WSGI module")
+    print(f"Current working directory: {os.getcwd()}")
+    print(f"Database path: {app.config['DATABASE']}")
