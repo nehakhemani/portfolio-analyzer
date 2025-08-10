@@ -470,9 +470,7 @@ function updateHoldingsManagement() {
                             <td>${holding.quantity.toFixed(4)}</td>
                             <td>${formatCurrency(holding.avg_cost, holding.currency)}</td>
                             <td>${formatCurrency(holding.cost_basis, holding.currency)}</td>
-                            <td>${holding.price_error ? 
-                                '<span class="error-price">⚠️ Price Error</span>' : 
-                                formatCurrency(holding.current_price, holding.currency)}</td>
+                            <td>${formatPriceWithStaleness(holding)}</td>
                             <td>${formatCurrency(holding.current_value, holding.currency)}</td>
                             <td class="${returnAmount >= 0 ? 'positive' : 'negative'}">
                                 ${formatCurrency(returnAmount, holding.currency)}
@@ -481,11 +479,18 @@ function updateHoldingsManagement() {
                                 ${returnPct.toFixed(1)}%
                             </td>
                             <td>
-                                <button onclick="deleteHolding('${holding.ticker}')" 
-                                        class="delete-btn" 
-                                        title="Delete ${holding.ticker}">
-                                    ✕
-                                </button>
+                                <div class="holding-actions">
+                                    <button onclick="showManualPriceDialog('${holding.ticker}', ${holding.current_price})" 
+                                            class="manual-price-btn" 
+                                            title="Set manual price for ${holding.ticker}">
+                                        💰
+                                    </button>
+                                    <button onclick="deleteHolding('${holding.ticker}')" 
+                                            class="delete-btn" 
+                                            title="Delete ${holding.ticker}">
+                                        ✕
+                                    </button>
+                                </div>
                             </td>
                         </tr>
                     `;
@@ -544,6 +549,146 @@ function formatCurrency(amount, currency) {
         return `${symbol}${amount.toLocaleString('en-US', {maximumFractionDigits: 0})}`;
     } else {
         return `${symbol}${amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+    }
+}
+
+function formatPriceWithStaleness(holding) {
+    if (holding.price_error) {
+        return '<span class="error-price">⚠️ Price Error</span>';
+    }
+    
+    const price = formatCurrency(holding.current_price, holding.currency);
+    const isManual = holding.is_manual;
+    const staleness = holding.staleness_level;
+    const ageStr = holding.data_age_str;
+    
+    if (isManual) {
+        return `<div class="price-display manual-price">
+            <div class="price">${price}</div>
+            <div class="staleness manual">💰 Manual (${ageStr})</div>
+        </div>`;
+    }
+    
+    if (!staleness || staleness === 'fresh') {
+        return `<div class="price-display fresh-price">
+            <div class="price">${price}</div>
+            <div class="staleness fresh">✅ Live</div>
+        </div>`;
+    }
+    
+    const stalenessClass = staleness === 'recent' ? 'recent' : 
+                          staleness === 'stale' ? 'stale' : 'very-stale';
+    const stalenessIcon = staleness === 'recent' ? '🟡' : 
+                         staleness === 'stale' ? '🟠' : '🔴';
+    
+    return `<div class="price-display ${stalenessClass}-price">
+        <div class="price">${price}</div>
+        <div class="staleness ${stalenessClass}">${stalenessIcon} ${ageStr}</div>
+    </div>`;
+}
+
+function showManualPriceDialog(ticker, currentPrice) {
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <h3>Set Manual Price for ${ticker}</h3>
+            <div class="form-group">
+                <label>Current Price: ${formatCurrency(currentPrice)}</label>
+            </div>
+            <div class="form-group">
+                <label for="manualPrice">New Price:</label>
+                <input type="number" id="manualPrice" step="0.01" min="0.01" placeholder="Enter price..." value="${currentPrice.toFixed(2)}">
+            </div>
+            <div class="form-group">
+                <label for="priceNotes">Notes (optional):</label>
+                <input type="text" id="priceNotes" placeholder="e.g., From broker, recent news...">
+            </div>
+            <div class="form-group">
+                <label for="expiresHours">Expires after (hours, optional):</label>
+                <select id="expiresHours">
+                    <option value="">Never expires</option>
+                    <option value="1">1 hour</option>
+                    <option value="6">6 hours</option>
+                    <option value="24">24 hours</option>
+                    <option value="168">1 week</option>
+                </select>
+            </div>
+            <div class="modal-buttons">
+                <button onclick="setManualPrice('${ticker}')" class="btn primary">Set Price</button>
+                <button onclick="removeManualPrice('${ticker}')" class="btn secondary">Remove Manual</button>
+                <button onclick="closeModal()" class="btn">Cancel</button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    document.getElementById('manualPrice').focus();
+}
+
+async function setManualPrice(ticker) {
+    try {
+        const price = parseFloat(document.getElementById('manualPrice').value);
+        const notes = document.getElementById('priceNotes').value;
+        const expiresHours = document.getElementById('expiresHours').value;
+        
+        if (!price || price <= 0) {
+            alert('Please enter a valid price');
+            return;
+        }
+        
+        const data = {
+            ticker: ticker,
+            price: price,
+            notes: notes || null,
+            expires_hours: expiresHours ? parseInt(expiresHours) : null
+        };
+        
+        const response = await authenticatedFetch(`${API_BASE}/manual-price`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(data)
+        });
+        
+        if (response && response.ok) {
+            const result = await response.json();
+            alert(`Manual price set: ${ticker} = $${price.toFixed(2)}`);
+            closeModal();
+            await loadPortfolio(); // Refresh to show manual price
+        } else {
+            const error = await response.json();
+            alert('Error setting manual price: ' + error.error);
+        }
+    } catch (error) {
+        alert('Error setting manual price: ' + error.message);
+    }
+}
+
+async function removeManualPrice(ticker) {
+    try {
+        const response = await authenticatedFetch(`${API_BASE}/manual-price/${ticker}`, {
+            method: 'DELETE'
+        });
+        
+        if (response && response.ok) {
+            alert(`Manual price removed for ${ticker}`);
+            closeModal();
+            await loadPortfolio(); // Refresh to show live price
+        } else {
+            const error = await response.json();
+            alert('Error removing manual price: ' + error.error);
+        }
+    } catch (error) {
+        alert('Error removing manual price: ' + error.message);
+    }
+}
+
+function closeModal() {
+    const modal = document.querySelector('.modal-overlay');
+    if (modal) {
+        modal.remove();
     }
 }
 

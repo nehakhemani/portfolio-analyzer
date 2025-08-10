@@ -980,6 +980,107 @@ def serve_template(filename):
         print(f"Error serving template: {e}")
         return jsonify({'error': 'Template not found'}), 404
 
+# Manual Price Management Endpoints
+@app.route('/api/manual-price', methods=['POST'])
+@require_auth  
+def set_manual_price():
+    """Set manual price override for a ticker"""
+    try:
+        data = request.get_json()
+        ticker = data.get('ticker', '').upper().strip()
+        price = float(data.get('price', 0))
+        currency = data.get('currency', 'USD').upper()
+        notes = data.get('notes', '')
+        expires_hours = data.get('expires_hours')
+        
+        if not ticker or price <= 0:
+            return jsonify({'error': 'Valid ticker and positive price required'}), 400
+        
+        # Use the stable market data service to set manual price
+        success = market_service.set_manual_price(
+            ticker=ticker,
+            price=price, 
+            currency=currency,
+            notes=notes,
+            expires_hours=expires_hours
+        )
+        
+        if success:
+            return jsonify({
+                'message': f'Manual price set for {ticker}',
+                'ticker': ticker,
+                'price': price,
+                'currency': currency
+            })
+        else:
+            return jsonify({'error': 'Failed to set manual price'}), 500
+            
+    except ValueError:
+        return jsonify({'error': 'Invalid price value'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/manual-price/<ticker>', methods=['DELETE'])
+@require_auth
+def remove_manual_price(ticker):
+    """Remove manual price override for a ticker"""
+    try:
+        ticker = ticker.upper().strip()
+        success = market_service.remove_manual_price(ticker)
+        
+        if success:
+            return jsonify({
+                'message': f'Manual price removed for {ticker}',
+                'ticker': ticker
+            })
+        else:
+            return jsonify({'error': f'No manual price found for {ticker}'}), 404
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/manual-prices', methods=['GET'])
+@require_auth
+def get_manual_prices():
+    """Get all manual price overrides"""
+    try:
+        conn = sqlite3.connect(app.config['DATABASE'])
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT ticker, price, currency, set_by, timestamp, notes, expires_at
+            FROM manual_prices 
+            WHERE expires_at IS NULL OR expires_at > ?
+            ORDER BY timestamp DESC
+        ''', (datetime.now(),))
+        
+        manual_prices = []
+        for row in cursor.fetchall():
+            ticker, price, currency, set_by, timestamp_str, notes, expires_at = row
+            set_time = datetime.fromisoformat(timestamp_str)
+            age_hours = (datetime.now() - set_time).total_seconds() / 3600
+            
+            manual_prices.append({
+                'ticker': ticker,
+                'price': price,
+                'currency': currency,
+                'set_by': set_by,
+                'timestamp': timestamp_str,
+                'age_hours': round(age_hours, 1),
+                'notes': notes,
+                'expires_at': expires_at
+            })
+        
+        conn.close()
+        
+        return jsonify({
+            'manual_prices': manual_prices,
+            'count': len(manual_prices)
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 # Add this right before if __name__ == '__main__':
 print("\nRegistered routes:")
 for rule in app.url_map.iter_rules():

@@ -20,7 +20,7 @@ class StableMarketDataService:
     def __init__(self, db_path='data/portfolio.db'):
         self.memory_cache = {}
         self.short_cache_duration = 300  # 5 minutes for active trading
-        self.long_cache_duration = 14400  # 4 hours for stable fallback
+        self.long_cache_duration = 2592000  # 30 days for extended fallback
         self.db_path = db_path
         self.last_fetch_attempts = {}
         
@@ -84,8 +84,22 @@ class StableMarketDataService:
                 )
             ''')
             
+            # Manual price override table - highest priority
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS manual_prices (
+                    ticker TEXT PRIMARY KEY,
+                    price REAL NOT NULL,
+                    currency TEXT DEFAULT 'USD',
+                    set_by TEXT DEFAULT 'user',
+                    timestamp DATETIME NOT NULL,
+                    notes TEXT,
+                    expires_at DATETIME  -- Optional expiration
+                )
+            ''')
+            
             # Index for fast lookups
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_ticker_timestamp ON price_cache(ticker, timestamp)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_manual_ticker ON manual_prices(ticker)')
             conn.commit()
             conn.close()
             print("Price cache database initialized")
@@ -95,11 +109,12 @@ class StableMarketDataService:
     
     def fetch_batch_quotes(self, tickers: List[str], force_refresh: bool = False) -> Dict:
         """
-        Fetch market data with multi-source fallback strategy:
-        1. Memory cache (5 min)
-        2. Multi-source API fetch (Yahoo → Alpha Vantage → Finnhub)
-        3. Database cache (4 hours)
-        4. Simulated pricing (last resort)
+        Comprehensive hybrid pricing strategy:
+        1. Manual price overrides (highest priority)
+        2. Memory cache (5 min for live data)
+        3. Multi-source API fetch (Yahoo → Alpha Vantage → Finnhub → IEX → FMP)
+        4. Extended database cache (30 days with staleness indicators)
+        5. Error status for complete failures
         """
         if not tickers:
             return {}
@@ -111,6 +126,13 @@ class StableMarketDataService:
         
         for ticker in tickers:
             try:
+                # Level 0: Manual price override (highest priority)
+                manual_data = self._get_manual_price(ticker)
+                if manual_data:
+                    market_data[ticker] = manual_data
+                    print(f"MANUAL {ticker}: User override - ${manual_data['price']:.2f} ({manual_data['data_age_str']})")
+                    continue
+                
                 # Level 1: Memory cache check
                 if not force_refresh and self._is_memory_cached(ticker):
                     market_data[ticker] = self.memory_cache[ticker]['data']
@@ -127,16 +149,13 @@ class StableMarketDataService:
                     print(f"LIVE {ticker}: Fresh {fresh_data.get('source', 'API')} data - ${fresh_data['price']:.2f}")
                     continue
                 
-                # Level 3: Database fallback
-                db_data = self._get_from_database(ticker)
+                # Level 3: Extended database cache (30 days) with staleness indicators
+                db_data = self._get_from_database_extended(ticker)
                 if db_data:
-                    # Add aging indicator
-                    age_hours = (datetime.now() - db_data['timestamp']).total_seconds() / 3600
-                    db_data['data_age_hours'] = round(age_hours, 1)
-                    db_data['is_cached'] = True
-                    
                     market_data[ticker] = db_data
-                    print(f"DB {ticker}: Database cache ({age_hours:.1f}h old) - ${db_data['price']:.2f}")
+                    age_str = db_data.get('data_age_str', 'unknown age')
+                    staleness = db_data.get('staleness_level', 'unknown')
+                    print(f"DB {ticker}: Extended cache ({age_str}, {staleness}) - ${db_data['price']:.2f}")
                     continue
                 
                 # Level 4: Return error status instead of fallback
@@ -628,6 +647,162 @@ class StableMarketDataService:
             print(f"Database retrieve failed for {ticker}: {e}")
         
         return None
+    
+    def _get_from_database_extended(self, ticker: str) -> Optional[Dict]:
+        """Retrieve cached price with extended 30-day duration and staleness indicators"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Get most recent entry within extended cache duration (30 days)
+            cursor.execute('''
+                SELECT ticker, price, change_pct, volume, market_cap, currency, source, timestamp, reliability_score
+                FROM price_cache 
+                WHERE ticker = ? AND timestamp > ?
+                ORDER BY timestamp DESC LIMIT 1
+            ''', (ticker, datetime.now() - timedelta(seconds=self.long_cache_duration)))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                last_update = datetime.fromisoformat(row[7])
+                age_hours = (datetime.now() - last_update).total_seconds() / 3600
+                age_days = age_hours / 24
+                
+                # Determine staleness level and create user-friendly age string
+                if age_hours < 1:
+                    staleness = 'fresh'
+                    age_str = f"{int(age_hours * 60)}m old"
+                elif age_hours < 24:
+                    staleness = 'recent'
+                    age_str = f"{age_hours:.1f}h old"
+                elif age_days < 7:
+                    staleness = 'stale'
+                    age_str = f"{age_days:.1f}d old"
+                else:
+                    staleness = 'very_stale'
+                    age_str = f"{age_days:.0f}d old"
+                
+                return {
+                    'price': float(row[1]),
+                    'change': float(row[2]) if row[2] else 0,
+                    'volume': int(row[3]) if row[3] else 0,
+                    'market_cap': int(row[4]) if row[4] else 0,
+                    'name': ticker,
+                    'currency': row[5] or 'USD',
+                    'source': f"{row[6]}_extended_cache",
+                    'timestamp': last_update,
+                    'reliability_score': float(row[8]) if row[8] else 1.0,
+                    'data_age_hours': round(age_hours, 1),
+                    'data_age_str': age_str,
+                    'staleness_level': staleness,
+                    'is_extended_cache': True
+                }
+        except Exception as e:
+            print(f"Extended database retrieve failed for {ticker}: {e}")
+        
+        return None
+    
+    def _get_manual_price(self, ticker: str) -> Optional[Dict]:
+        """Get manual price override if available and not expired"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT ticker, price, currency, set_by, timestamp, notes, expires_at
+                FROM manual_prices 
+                WHERE ticker = ? AND (expires_at IS NULL OR expires_at > ?)
+                ORDER BY timestamp DESC LIMIT 1
+            ''', (ticker, datetime.now()))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                ticker, price, currency, set_by, timestamp_str, notes, expires_at = row
+                set_time = datetime.fromisoformat(timestamp_str)
+                age_hours = (datetime.now() - set_time).total_seconds() / 3600
+                age_days = age_hours / 24
+                
+                # Create age string
+                if age_hours < 1:
+                    age_str = f"{int(age_hours * 60)}m old"
+                elif age_days < 1:
+                    age_str = f"{age_hours:.1f}h old" 
+                else:
+                    age_str = f"{age_days:.1f}d old"
+                
+                return {
+                    'price': float(price),
+                    'change': 0,  # Manual prices don't have change data
+                    'volume': 0,
+                    'market_cap': 0,
+                    'name': ticker,
+                    'currency': currency or 'USD',
+                    'source': 'manual_override',
+                    'timestamp': set_time,
+                    'is_manual': True,
+                    'set_by': set_by,
+                    'notes': notes,
+                    'data_age_hours': round(age_hours, 1),
+                    'data_age_str': age_str,
+                    'staleness_level': 'manual',
+                    'reliability_score': 1.0  # Manual prices are fully reliable
+                }
+                
+        except Exception as e:
+            print(f"Manual price lookup failed for {ticker}: {e}")
+        
+        return None
+    
+    def set_manual_price(self, ticker: str, price: float, currency: str = 'USD', 
+                        notes: str = None, expires_hours: int = None) -> bool:
+        """Set manual price override for a ticker"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            expires_at = None
+            if expires_hours:
+                expires_at = datetime.now() + timedelta(hours=expires_hours)
+            
+            cursor.execute('''
+                INSERT OR REPLACE INTO manual_prices 
+                (ticker, price, currency, set_by, timestamp, notes, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (ticker, price, currency, 'user', datetime.now(), notes, expires_at))
+            
+            conn.commit()
+            conn.close()
+            
+            print(f"Manual price set: {ticker} = ${price:.2f}")
+            return True
+            
+        except Exception as e:
+            print(f"Failed to set manual price for {ticker}: {e}")
+            return False
+    
+    def remove_manual_price(self, ticker: str) -> bool:
+        """Remove manual price override for a ticker"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('DELETE FROM manual_prices WHERE ticker = ?', (ticker,))
+            deleted = cursor.rowcount > 0
+            
+            conn.commit()
+            conn.close()
+            
+            if deleted:
+                print(f"Manual price removed for {ticker}")
+            return deleted
+            
+        except Exception as e:
+            print(f"Failed to remove manual price for {ticker}: {e}")
+            return False
     
     def _generate_fallback_price(self, ticker: str) -> Dict:
         """Use last known good price instead of random simulation"""
