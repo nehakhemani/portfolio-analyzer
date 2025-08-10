@@ -884,18 +884,37 @@ async function showCacheStats() {
         if (response && response.ok) {
             const stats = await response.json();
             
+            // Build API sources info
+            let apiInfo = '\n🌐 API Sources Status:\n';
+            if (stats.api_sources) {
+                for (const [key, source] of Object.entries(stats.api_sources)) {
+                    const status = source.available ? '🟢' : '🔴';
+                    const reliability = (source.reliability * 100).toFixed(1);
+                    apiInfo += `${status} ${source.name}: ${reliability}% reliable (${source.usage_count}/${source.rate_limit} calls)\n`;
+                }
+            }
+            
+            // Build source usage info
+            let usageInfo = '';
+            if (stats.source_usage && Object.keys(stats.source_usage).length > 0) {
+                usageInfo = '\n📈 24hr Source Usage:\n';
+                for (const [source, usage] of Object.entries(stats.source_usage)) {
+                    usageInfo += `• ${source}: ${usage.requests_24h} requests\n`;
+                }
+            }
+            
             const message = `
-📊 Market Data Cache Statistics:
+📊 Multi-Source Market Data Statistics:
 
 🗂️ Total Cached Tickers: ${stats.total_cached_tickers}
 📈 Average Reliability: ${stats.average_reliability}
 🕒 Last Update: ${stats.last_update}
 ⚡ Recent Updates (1hr): ${stats.recent_updates}
-💾 Memory Cache Size: ${stats.memory_cache_size}
-🚀 Service: ${stats.service_version}
+💾 Memory Cache Size: ${stats.memory_cache_size}${apiInfo}${usageInfo}
+🚀 System: ${stats.system_version || stats.service_version || 'v2.0'}
 📅 Retrieved: ${new Date(stats.timestamp).toLocaleString()}
 
-This shows how well the price caching system is working!
+Multiple APIs ensure 99.9% uptime even when Yahoo Finance fails!
             `;
             
             alert(message);

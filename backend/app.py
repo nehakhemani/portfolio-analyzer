@@ -23,22 +23,22 @@ print(f"Python path: {sys.path[:3]}")  # Show first 3 entries
 try:
     print("Importing services...")
     from services.stable_market_data import StableMarketDataService as MarketDataService
-    print("✓ StableMarketDataService imported (Phase 1 reliability upgrade)")
+    print("StableMarketDataService imported (Multi-source reliability upgrade)")
     from services.analysis import PortfolioAnalyzer
-    print("✓ PortfolioAnalyzer imported")
+    print("PortfolioAnalyzer imported")
     from services.recommendations import RecommendationEngine
-    print("✓ RecommendationEngine imported")
+    print("RecommendationEngine imported")
     from services.ml_recommendations import MLRecommendationEngine
-    print("✓ MLRecommendationEngine imported")
+    print("MLRecommendationEngine imported")
     from services.enhanced_ml_recommendations_simple import EnhancedMLRecommendationEngine
-    print("✓ EnhancedMLRecommendationEngine imported")
+    print("EnhancedMLRecommendationEngine imported")
     from services.currency_converter import CurrencyConverter
-    print("✓ CurrencyConverter imported")
+    print("CurrencyConverter imported")
     from auth import require_auth, rate_limit_only, validate_request_data, security_manager
-    print("✓ Auth modules imported")
+    print("Auth modules imported")
     print("All imports successful!")
 except Exception as e:
-    print(f"✗ Import failed: {e}")
+    print(f"Import failed: {e}")
     import traceback
     traceback.print_exc()
     # Create minimal fallbacks to prevent complete failure
@@ -989,9 +989,9 @@ for rule in app.url_map.iter_rules():
 try:
     print("Initializing database on module load...")
     init_db()
-    print("✓ Database initialized successfully")
+    print("Database initialized successfully")
 except Exception as e:
-    print(f"✗ Database initialization failed: {e}")
+    print(f"Database initialization failed: {e}")
 
 if __name__ == '__main__':
     print("\n" + "="*50)

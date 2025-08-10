@@ -1,8 +1,12 @@
 """
-Stable Market Data Service - Phase 1: Enhanced Caching & Database Persistence
-Production-ready price fetching with graceful degradation and reliability
+Stable Market Data Service - Multi-Source with Enhanced Reliability
+Production-ready price fetching with multiple APIs, caching & validation
+Phase 1: Enhanced caching & database persistence ✓
+Phase 2: Multi-source API fallbacks ✓
+Phase 3: Smart source rotation & validation ✓
 """
 import yfinance as yf
+import requests
 from datetime import datetime, timedelta
 import time
 import logging
@@ -19,6 +23,42 @@ class StableMarketDataService:
         self.long_cache_duration = 14400  # 4 hours for stable fallback
         self.db_path = db_path
         self.last_fetch_attempts = {}
+        
+        # Multi-source API configuration
+        self.api_sources = {
+            'yahoo': {
+                'name': 'Yahoo Finance',
+                'priority': 1,
+                'rate_limit': 2000,  # requests per hour
+                'reliability': 0.85,
+                'last_success': datetime.now(),
+                'consecutive_failures': 0
+            },
+            'alpha_vantage': {
+                'name': 'Alpha Vantage',
+                'priority': 2,
+                'rate_limit': 25,  # free tier: 25 requests per day
+                'reliability': 0.95,
+                'last_success': datetime.now(),
+                'consecutive_failures': 0,
+                'api_key': os.getenv('ALPHA_VANTAGE_API_KEY', 'demo')  # Use demo key for testing
+            },
+            'finnhub': {
+                'name': 'Finnhub',
+                'priority': 3,
+                'rate_limit': 3600,  # free tier: 60 requests per minute
+                'reliability': 0.90,
+                'last_success': datetime.now(),
+                'consecutive_failures': 0,
+                'api_key': os.getenv('FINNHUB_API_KEY', 'demo')
+            }
+        }
+        
+        # Track usage for rate limiting
+        self.api_usage = {}
+        for source in self.api_sources:
+            self.api_usage[source] = {'count': 0, 'last_reset': datetime.now()}
+        
         self._init_price_database()
         
     def _init_price_database(self):
@@ -48,16 +88,16 @@ class StableMarketDataService:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_ticker_timestamp ON price_cache(ticker, timestamp)')
             conn.commit()
             conn.close()
-            print("✓ Price cache database initialized")
+            print("Price cache database initialized")
             
         except Exception as e:
             print(f"Warning: Could not initialize price database: {e}")
     
     def fetch_batch_quotes(self, tickers: List[str], force_refresh: bool = False) -> Dict:
         """
-        Fetch market data with multi-level fallback strategy:
+        Fetch market data with multi-source fallback strategy:
         1. Memory cache (5 min)
-        2. Yahoo Finance API 
+        2. Multi-source API fetch (Yahoo → Alpha Vantage → Finnhub)
         3. Database cache (4 hours)
         4. Simulated pricing (last resort)
         """
@@ -67,7 +107,7 @@ class StableMarketDataService:
         market_data = {}
         failed_tickers = []
         
-        print(f"📊 Fetching prices for {len(tickers)} tickers (force_refresh={force_refresh})")
+        print(f"📊 Multi-source fetching for {len(tickers)} tickers (force_refresh={force_refresh})")
         
         for ticker in tickers:
             try:
@@ -77,14 +117,14 @@ class StableMarketDataService:
                     print(f"✓ {ticker}: Memory cache")
                     continue
                 
-                # Level 2: Try fresh API fetch
-                fresh_data = self._fetch_from_yahoo(ticker)
+                # Level 2: Try multi-source API fetch
+                fresh_data = self._fetch_from_best_source(ticker)
                 if fresh_data and fresh_data.get('price', 0) > 0:
                     # Success - store in both memory and database
                     self._store_in_memory(ticker, fresh_data)
                     self._store_in_database(ticker, fresh_data)
                     market_data[ticker] = fresh_data
-                    print(f"✓ {ticker}: Fresh API data - ${fresh_data['price']:.2f}")
+                    print(f"✓ {ticker}: Fresh {fresh_data.get('source', 'API')} data - ${fresh_data['price']:.2f}")
                     continue
                 
                 # Level 3: Database fallback
@@ -120,6 +160,231 @@ class StableMarketDataService:
             print(f"⚠ Failed tickers: {', '.join(failed_tickers)}")
         
         return market_data
+    
+    def _fetch_from_best_source(self, ticker: str) -> Optional[Dict]:
+        """Try multiple API sources in order of reliability and availability"""
+        
+        # Get available sources sorted by priority and reliability
+        available_sources = self._get_available_sources()
+        
+        for source_name in available_sources:
+            try:
+                # Check rate limits
+                if not self._check_rate_limit(source_name):
+                    print(f"⚠ {source_name}: Rate limit reached, skipping")
+                    continue
+                
+                # Try to fetch from this source
+                if source_name == 'yahoo':
+                    data = self._fetch_from_yahoo(ticker)
+                elif source_name == 'alpha_vantage':
+                    data = self._fetch_from_alpha_vantage(ticker)
+                elif source_name == 'finnhub':
+                    data = self._fetch_from_finnhub(ticker)
+                else:
+                    continue
+                
+                if data and data.get('price', 0) > 0:
+                    # Validate price seems reasonable
+                    if self._validate_price(ticker, data['price']):
+                        # Update source reliability
+                        self._update_source_success(source_name)
+                        data['source'] = source_name
+                        return data
+                    else:
+                        print(f"⚠ {ticker}: {source_name} price validation failed: ${data['price']}")
+                
+            except Exception as e:
+                print(f"❌ {source_name} failed for {ticker}: {e}")
+                self._update_source_failure(source_name)
+        
+        print(f"❌ All sources failed for {ticker}")
+        return None
+    
+    def _get_available_sources(self) -> List[str]:
+        """Get API sources sorted by reliability and availability"""
+        sources = []
+        
+        for name, config in self.api_sources.items():
+            # Skip sources with too many consecutive failures
+            if config['consecutive_failures'] >= 5:
+                continue
+            
+            # Check if we have API key for paid sources
+            if name in ['alpha_vantage', 'finnhub']:
+                api_key = config.get('api_key')
+                if not api_key or api_key == 'demo':
+                    continue  # Skip if no valid API key
+            
+            sources.append(name)
+        
+        # Sort by reliability score (descending) then by priority (ascending)
+        sources.sort(key=lambda x: (-self.api_sources[x]['reliability'], self.api_sources[x]['priority']))
+        
+        return sources
+    
+    def _check_rate_limit(self, source: str) -> bool:
+        """Check if we can make a request to this source"""
+        now = datetime.now()
+        usage = self.api_usage[source]
+        config = self.api_sources[source]
+        
+        # Reset counter if needed (daily for Alpha Vantage, hourly for others)
+        reset_hours = 24 if source == 'alpha_vantage' else 1
+        if (now - usage['last_reset']).total_seconds() > reset_hours * 3600:
+            usage['count'] = 0
+            usage['last_reset'] = now
+        
+        return usage['count'] < config['rate_limit']
+    
+    def _update_source_success(self, source: str):
+        """Update source statistics after successful fetch"""
+        config = self.api_sources[source]
+        config['last_success'] = datetime.now()
+        config['consecutive_failures'] = 0
+        
+        # Gradually improve reliability score
+        config['reliability'] = min(0.99, config['reliability'] * 0.95 + 0.05)
+        
+        # Update usage counter
+        self.api_usage[source]['count'] += 1
+    
+    def _update_source_failure(self, source: str):
+        """Update source statistics after failed fetch"""
+        config = self.api_sources[source]
+        config['consecutive_failures'] += 1
+        
+        # Gradually decrease reliability score
+        config['reliability'] = max(0.01, config['reliability'] * 0.9)
+    
+    def _validate_price(self, ticker: str, price: float) -> bool:
+        """Validate that the price seems reasonable"""
+        if not price or price <= 0:
+            return False
+        
+        # Check against historical data if available
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Get recent price history
+            cursor.execute('''
+                SELECT price FROM price_cache 
+                WHERE ticker = ? AND timestamp > ?
+                ORDER BY timestamp DESC LIMIT 10
+            ''', (ticker, datetime.now() - timedelta(days=7)))
+            
+            recent_prices = [row[0] for row in cursor.fetchall()]
+            conn.close()
+            
+            if recent_prices:
+                avg_recent = sum(recent_prices) / len(recent_prices)
+                # Allow 50% deviation from recent average (handles stock splits/volatility)
+                if price < avg_recent * 0.5 or price > avg_recent * 2.0:
+                    return False
+        except:
+            pass  # If validation fails, accept the price
+        
+        # Basic sanity checks
+        if price > 10000:  # No stock should be over $10,000
+            return False
+        
+        return True
+    
+    def _fetch_from_alpha_vantage(self, ticker: str, timeout: int = 5) -> Optional[Dict]:
+        """Fetch from Alpha Vantage API"""
+        try:
+            api_key = self.api_sources['alpha_vantage']['api_key']
+            if not api_key or api_key == 'demo':
+                return None
+            
+            # Alpha Vantage Global Quote API
+            url = f"https://www.alphavantage.co/query"
+            params = {
+                'function': 'GLOBAL_QUOTE',
+                'symbol': ticker,
+                'apikey': api_key
+            }
+            
+            response = requests.get(url, params=params, timeout=timeout)
+            if response.status_code != 200:
+                return None
+            
+            data = response.json()
+            
+            # Check for API limit message
+            if 'Note' in data or 'Information' in data:
+                print(f"Alpha Vantage: {data.get('Note', data.get('Information', 'Rate limit'))}")
+                return None
+            
+            quote = data.get('Global Quote', {})
+            if not quote:
+                return None
+            
+            price = float(quote.get('05. price', 0))
+            change_pct = float(quote.get('10. change percent', '0').replace('%', ''))
+            
+            if price > 0:
+                return {
+                    'price': price,
+                    'change': change_pct,
+                    'volume': int(quote.get('06. volume', 0)),
+                    'market_cap': 0,  # Not provided by this endpoint
+                    'name': ticker,
+                    'currency': 'USD',
+                    'source': 'alpha_vantage',
+                    'timestamp': datetime.now()
+                }
+                
+        except Exception as e:
+            print(f"Alpha Vantage error for {ticker}: {e}")
+        
+        return None
+    
+    def _fetch_from_finnhub(self, ticker: str, timeout: int = 5) -> Optional[Dict]:
+        """Fetch from Finnhub API"""
+        try:
+            api_key = self.api_sources['finnhub']['api_key']
+            if not api_key or api_key == 'demo':
+                return None
+            
+            # Finnhub Quote API
+            url = f"https://finnhub.io/api/v1/quote"
+            params = {
+                'symbol': ticker,
+                'token': api_key
+            }
+            
+            response = requests.get(url, params=params, timeout=timeout)
+            if response.status_code != 200:
+                return None
+            
+            data = response.json()
+            
+            # Check if we got valid data
+            current_price = data.get('c', 0)  # Current price
+            prev_close = data.get('pc', 0)    # Previous close
+            
+            if current_price and current_price > 0:
+                change_pct = 0
+                if prev_close and prev_close > 0:
+                    change_pct = ((current_price - prev_close) / prev_close) * 100
+                
+                return {
+                    'price': float(current_price),
+                    'change': round(change_pct, 2),
+                    'volume': 0,  # Not provided in basic quote
+                    'market_cap': 0,
+                    'name': ticker,
+                    'currency': 'USD',
+                    'source': 'finnhub',
+                    'timestamp': datetime.now()
+                }
+                
+        except Exception as e:
+            print(f"Finnhub error for {ticker}: {e}")
+        
+        return None
     
     def _fetch_from_yahoo(self, ticker: str, timeout: int = 3) -> Optional[Dict]:
         """Fetch from Yahoo Finance with timeout and error handling"""
@@ -340,11 +605,12 @@ class StableMarketDataService:
         return ticker
     
     def get_cache_stats(self) -> Dict:
-        """Get cache performance statistics"""
+        """Get comprehensive cache and API source statistics"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
+            # Basic cache stats
             cursor.execute('SELECT COUNT(*), AVG(reliability_score), MAX(timestamp) FROM price_cache')
             stats = cursor.fetchone()
             
@@ -352,14 +618,48 @@ class StableMarketDataService:
                          (datetime.now() - timedelta(hours=1),))
             recent_count = cursor.fetchone()[0]
             
+            # Source usage statistics
+            cursor.execute('''
+                SELECT source, COUNT(*), AVG(price), MAX(timestamp)
+                FROM price_cache 
+                WHERE timestamp > ?
+                GROUP BY source
+                ORDER BY COUNT(*) DESC
+            ''', (datetime.now() - timedelta(days=1),))
+            
+            source_stats = {}
+            for row in cursor.fetchall():
+                source_stats[row[0] or 'unknown'] = {
+                    'requests_24h': row[1],
+                    'avg_price': round(row[2] or 0, 2),
+                    'last_used': row[3] or 'Never'
+                }
+            
             conn.close()
+            
+            # API source health
+            api_health = {}
+            for source, config in self.api_sources.items():
+                usage = self.api_usage.get(source, {'count': 0, 'last_reset': datetime.now()})
+                api_health[source] = {
+                    'name': config['name'],
+                    'reliability': round(config['reliability'], 3),
+                    'consecutive_failures': config['consecutive_failures'],
+                    'usage_count': usage['count'],
+                    'rate_limit': config['rate_limit'],
+                    'last_success': config['last_success'].isoformat() if config['last_success'] else 'Never',
+                    'available': config['consecutive_failures'] < 5
+                }
             
             return {
                 'total_cached_tickers': stats[0] or 0,
                 'average_reliability': round(stats[1] or 0, 2),
                 'last_update': stats[2] or 'Never',
                 'recent_updates': recent_count or 0,
-                'memory_cache_size': len(self.memory_cache)
+                'memory_cache_size': len(self.memory_cache),
+                'api_sources': api_health,
+                'source_usage': source_stats,
+                'system_version': 'Multi-Source Stable v2.0'
             }
         except:
             return {'error': 'Could not retrieve cache stats'}
