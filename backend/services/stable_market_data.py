@@ -161,6 +161,34 @@ class StableMarketDataService:
         
         return market_data
     
+    def fetch_batch_quotes_with_exchange(self, ticker_exchange_map: dict) -> Dict:
+        """
+        Compatibility method for transaction portfolio service
+        Maps to the main fetch_batch_quotes with exchange information
+        """
+        if not ticker_exchange_map:
+            return {}
+        
+        print(f"Exchange-aware fetching for {len(ticker_exchange_map)} tickers")
+        
+        # Convert to simple ticker list for our main method
+        tickers = list(ticker_exchange_map.keys())
+        
+        # Use the main fetch method which already handles exchanges
+        results = self.fetch_batch_quotes(tickers, force_refresh=False)
+        
+        # Add exchange information to results
+        for ticker in results:
+            if ticker in ticker_exchange_map:
+                results[ticker]['exchange'] = ticker_exchange_map[ticker]
+                
+                # Format ticker for the exchange if needed
+                if 'formatted_ticker' not in results[ticker]:
+                    formatted_ticker = self._format_ticker_for_exchange(ticker, ticker_exchange_map[ticker])
+                    results[ticker]['formatted_ticker'] = formatted_ticker
+        
+        return results
+    
     def _fetch_from_best_source(self, ticker: str) -> Optional[Dict]:
         """Try multiple API sources in order of reliability and availability"""
         
