@@ -878,6 +878,36 @@ async function clearPortfolio() {
     }
 }
 
+async function showCacheStats() {
+    try {
+        const response = await fetch(`${API_BASE}/cache-stats`);
+        if (response && response.ok) {
+            const stats = await response.json();
+            
+            const message = `
+📊 Market Data Cache Statistics:
+
+🗂️ Total Cached Tickers: ${stats.total_cached_tickers}
+📈 Average Reliability: ${stats.average_reliability}
+🕒 Last Update: ${stats.last_update}
+⚡ Recent Updates (1hr): ${stats.recent_updates}
+💾 Memory Cache Size: ${stats.memory_cache_size}
+🚀 Service: ${stats.service_version}
+📅 Retrieved: ${new Date(stats.timestamp).toLocaleString()}
+
+This shows how well the price caching system is working!
+            `;
+            
+            alert(message);
+        } else {
+            alert('Could not retrieve cache statistics');
+        }
+    } catch (error) {
+        console.error('Error getting cache stats:', error);
+        alert('Error retrieving cache stats: ' + error.message);
+    }
+}
+
 // Download sample CSV files
 function downloadSample(type) {
     const csvContent = type === 'transactions' ? 
@@ -961,4 +991,5 @@ window.addNewHolding = addNewHolding;
 window.deleteHolding = deleteHolding;
 window.downloadSample = downloadSample;
 window.clearPortfolio = clearPortfolio;
+window.showCacheStats = showCacheStats;
 window.toggleTransactionFields = toggleTransactionFields;

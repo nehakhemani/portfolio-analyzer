@@ -22,8 +22,8 @@ print(f"Python path: {sys.path[:3]}")  # Show first 3 entries
 
 try:
     print("Importing services...")
-    from services.market_data import MarketDataService
-    print("✓ MarketDataService imported")
+    from services.stable_market_data import StableMarketDataService as MarketDataService
+    print("✓ StableMarketDataService imported (Phase 1 reliability upgrade)")
     from services.analysis import PortfolioAnalyzer
     print("✓ PortfolioAnalyzer imported")
     from services.recommendations import RecommendationEngine
@@ -209,6 +209,17 @@ def health_check():
 def api_status():
     """API status check without authentication"""
     return jsonify({'status': 'Portfolio Analyzer API is running', 'version': '2.0'}), 200
+
+@app.route('/api/cache-stats', methods=['GET'])
+def cache_stats():
+    """Get market data cache statistics and health"""
+    try:
+        stats = market_service.get_cache_stats()
+        stats['timestamp'] = datetime.now().isoformat()
+        stats['service_version'] = 'Stable Market Data v1.0'
+        return jsonify(stats), 200
+    except Exception as e:
+        return jsonify({'error': str(e), 'service': 'cache_stats'}), 500
 
 @app.route('/api/check-auth', methods=['GET'])
 def check_auth():
@@ -457,7 +468,10 @@ def get_market_data():
     from services.transaction_portfolio import TransactionPortfolioService
     portfolio_service = TransactionPortfolioService()
     
-    print("Market data endpoint called - fetching live prices...")
+    # Check for force refresh parameter
+    force_refresh = request.args.get('force_refresh', 'false').lower() == 'true'
+    print(f"Market data endpoint called - fetching live prices (force_refresh={force_refresh})...")
+    
     # Fetch prices with retry mechanism
     portfolio_data = portfolio_service.calculate_portfolio_from_transactions(app.config['DATABASE'], fetch_prices=True)
     
