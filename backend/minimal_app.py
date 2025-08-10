@@ -66,7 +66,7 @@ def test_imports():
         results['yfinance'] = f"ERROR - {str(e)}"
     
     try:
-        from services.market_data import MarketDataService
+        from services.stable_market_data import StableMarketDataService as MarketDataService
         results['market_data'] = "OK"
     except Exception as e:
         results['market_data'] = f"ERROR - {str(e)}"

@@ -107,14 +107,14 @@ class StableMarketDataService:
         market_data = {}
         failed_tickers = []
         
-        print(f"📊 Multi-source fetching for {len(tickers)} tickers (force_refresh={force_refresh})")
+        print(f"Multi-source fetching for {len(tickers)} tickers (force_refresh={force_refresh})")
         
         for ticker in tickers:
             try:
                 # Level 1: Memory cache check
                 if not force_refresh and self._is_memory_cached(ticker):
                     market_data[ticker] = self.memory_cache[ticker]['data']
-                    print(f"✓ {ticker}: Memory cache")
+                    print(f"CACHE {ticker}: Memory cache")
                     continue
                 
                 # Level 2: Try multi-source API fetch
@@ -124,7 +124,7 @@ class StableMarketDataService:
                     self._store_in_memory(ticker, fresh_data)
                     self._store_in_database(ticker, fresh_data)
                     market_data[ticker] = fresh_data
-                    print(f"✓ {ticker}: Fresh {fresh_data.get('source', 'API')} data - ${fresh_data['price']:.2f}")
+                    print(f"LIVE {ticker}: Fresh {fresh_data.get('source', 'API')} data - ${fresh_data['price']:.2f}")
                     continue
                 
                 # Level 3: Database fallback
@@ -136,17 +136,17 @@ class StableMarketDataService:
                     db_data['is_cached'] = True
                     
                     market_data[ticker] = db_data
-                    print(f"⚠ {ticker}: Database cache ({age_hours:.1f}h old) - ${db_data['price']:.2f}")
+                    print(f"DB {ticker}: Database cache ({age_hours:.1f}h old) - ${db_data['price']:.2f}")
                     continue
                 
                 # Level 4: Last resort - simulated pricing
                 fallback_data = self._generate_fallback_price(ticker)
                 market_data[ticker] = fallback_data
                 failed_tickers.append(ticker)
-                print(f"🔄 {ticker}: Fallback pricing - ${fallback_data['price']:.2f}")
+                print(f"SIM {ticker}: Fallback pricing - ${fallback_data['price']:.2f}")
                 
             except Exception as e:
-                print(f"❌ {ticker}: All methods failed - {e}")
+                print(f"ERROR {ticker}: All methods failed - {e}")
                 # Still provide fallback data
                 fallback_data = self._generate_fallback_price(ticker)
                 market_data[ticker] = fallback_data
@@ -154,10 +154,10 @@ class StableMarketDataService:
         
         # Report success rate
         success_rate = ((len(tickers) - len(failed_tickers)) / len(tickers)) * 100
-        print(f"📈 Price fetch success: {success_rate:.1f}% ({len(tickers)-len(failed_tickers)}/{len(tickers)})")
+        print(f"SUCCESS: Price fetch success: {success_rate:.1f}% ({len(tickers)-len(failed_tickers)}/{len(tickers)})")
         
         if failed_tickers:
-            print(f"⚠ Failed tickers: {', '.join(failed_tickers)}")
+            print(f"FAILED tickers: {', '.join(failed_tickers)}")
         
         return market_data
     
@@ -171,7 +171,7 @@ class StableMarketDataService:
             try:
                 # Check rate limits
                 if not self._check_rate_limit(source_name):
-                    print(f"⚠ {source_name}: Rate limit reached, skipping")
+                    print(f"RATELIMIT {source_name}: Rate limit reached, skipping")
                     continue
                 
                 # Try to fetch from this source
@@ -192,13 +192,13 @@ class StableMarketDataService:
                         data['source'] = source_name
                         return data
                     else:
-                        print(f"⚠ {ticker}: {source_name} price validation failed: ${data['price']}")
+                        print(f"INVALID {ticker}: {source_name} price validation failed: ${data['price']}")
                 
             except Exception as e:
-                print(f"❌ {source_name} failed for {ticker}: {e}")
+                print(f"ERROR {source_name} failed for {ticker}: {e}")
                 self._update_source_failure(source_name)
         
-        print(f"❌ All sources failed for {ticker}")
+        print(f"ERROR All sources failed for {ticker}")
         return None
     
     def _get_available_sources(self) -> List[str]:
@@ -420,14 +420,7 @@ class StableMarketDataService:
             except:
                 pass  # Fallback to regular info
             
-            # Fallback to regular info with timeout
-            import signal
-            def timeout_handler(signum, frame):
-                raise TimeoutError("Yahoo Finance timeout")
-            
-            signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(timeout)
-            
+            # Fallback to regular info (Windows compatible)
             try:
                 info = stock.info
                 current_price = info.get('regularMarketPrice', info.get('previousClose', 0))
@@ -449,8 +442,8 @@ class StableMarketDataService:
                         'source': 'yahoo_full',
                         'timestamp': datetime.now()
                     }
-            finally:
-                signal.alarm(0)
+            except Exception as info_error:
+                print(f"Yahoo info fetch failed for {ticker}: {info_error}")
                 
         except Exception as e:
             print(f"Yahoo fetch failed for {ticker}: {e}")
@@ -677,7 +670,7 @@ class StableMarketDataService:
             conn.commit()
             conn.close()
             
-            print(f"✓ Cleaned up {deleted_count} old cache entries (older than {days_old} days)")
+            print(f"CLEANED {deleted_count} old cache entries (older than {days_old} days)")
             return deleted_count
             
         except Exception as e:

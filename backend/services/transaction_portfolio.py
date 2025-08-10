@@ -7,7 +7,7 @@ This calculates the actual portfolio based on transaction history and current ma
 import pandas as pd
 import sqlite3
 from datetime import datetime
-from services.market_data import MarketDataService
+from services.stable_market_data import StableMarketDataService as MarketDataService
 
 class TransactionPortfolioService:
     def __init__(self):
