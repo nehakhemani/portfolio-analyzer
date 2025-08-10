@@ -73,18 +73,38 @@ class TransactionPortfolioService:
                 print(f"Using cached/fallback pricing for {len(active_positions)} holdings...")
             
             for ticker, position in active_positions.items():
-                # Use fetched data if available, otherwise fallback
-                if ticker in market_data and market_data[ticker].get('price', 0) > 0:
-                    current_price = float(market_data[ticker]['price'])
-                    print(f"✓ Live price for {ticker}: ${current_price:.2f}")
+                # Handle price fetch results
+                price_error = False
+                error_message = None
+                
+                if ticker in market_data:
+                    ticker_data = market_data[ticker]
+                    
+                    if ticker_data.get('has_error', False):
+                        # Price fetch failed - use avg_cost for calculations but mark as error
+                        current_price = position['avg_cost']
+                        price_error = True
+                        error_message = ticker_data.get('error', 'Price fetch failed')
+                        print(f"❌ Price error for {ticker}: {error_message} - using avg_cost ${current_price:.2f}")
+                        
+                    elif ticker_data.get('price', 0) > 0:
+                        # Success - valid price
+                        current_price = float(ticker_data['price'])
+                        print(f"✓ Live price for {ticker}: ${current_price:.2f}")
+                        
+                    else:
+                        # No valid price - use avg_cost but mark as error
+                        current_price = position['avg_cost']
+                        price_error = True
+                        error_message = "No valid price data available"
+                        print(f"⚠️  No valid price for {ticker}: using avg_cost ${current_price:.2f}")
                 else:
-                    # Fast fallback using avg_cost + small variation for realism
-                    import random
-                    random.seed(hash(ticker) % 10000)  # Consistent per ticker
-                    variation = random.uniform(-0.02, 0.02)
-                    current_price = position['avg_cost'] * (1 + variation)
+                    # No market data at all - use avg_cost but mark as error if prices were requested
+                    current_price = position['avg_cost']
                     if fetch_prices:
-                        print(f"💡 Fallback price for {ticker}: ${current_price:.2f} (avg_cost + {variation*100:.1f}%)")
+                        price_error = True
+                        error_message = "No market data available"
+                        print(f"⚠️  No data for {ticker}: using avg_cost ${current_price:.2f}")
                 
                 # Calculate values
                 cost_basis = position['total_cost']
@@ -102,7 +122,9 @@ class TransactionPortfolioService:
                     'total_return': total_return,
                     'return_percentage': return_pct,
                     'currency': position['currency'],
-                    'exchange': position.get('exchange', 'UNKNOWN')
+                    'exchange': position.get('exchange', 'UNKNOWN'),
+                    'price_error': price_error,
+                    'error_message': error_message
                 }
                 
                 holdings.append(holding)
@@ -229,9 +251,18 @@ class TransactionPortfolioService:
                 # Check which ones succeeded
                 new_failed = []
                 for ticker in failed_tickers:
-                    if ticker in batch_result and batch_result[ticker].get('price', 0) > 0:
-                        market_data[ticker] = batch_result[ticker]
-                        print(f"✓ Retry success: {ticker}")
+                    if ticker in batch_result:
+                        ticker_data = batch_result[ticker]
+                        if ticker_data.get('has_error', False):
+                            # Price fetch failed - record the error
+                            market_data[ticker] = ticker_data
+                            print(f"❌ Price error: {ticker} - {ticker_data.get('error', 'Unknown error')}")
+                        elif ticker_data.get('price', 0) > 0:
+                            # Success - valid price
+                            market_data[ticker] = ticker_data
+                            print(f"✓ Retry success: {ticker}")
+                        else:
+                            new_failed.append(ticker)
                     else:
                         new_failed.append(ticker)
                 

@@ -139,17 +139,43 @@ class StableMarketDataService:
                     print(f"DB {ticker}: Database cache ({age_hours:.1f}h old) - ${db_data['price']:.2f}")
                     continue
                 
-                # Level 4: Last resort - simulated pricing
-                fallback_data = self._generate_fallback_price(ticker)
-                market_data[ticker] = fallback_data
+                # Level 4: Return error status instead of fallback
+                error_data = {
+                    'ticker': ticker,
+                    'status': 'error',
+                    'error': 'No price data available - all API sources failed',
+                    'price': None,
+                    'change': None,
+                    'volume': None,
+                    'market_cap': None,
+                    'name': ticker,
+                    'currency': 'USD',
+                    'source': 'none',
+                    'timestamp': datetime.now(),
+                    'has_error': True
+                }
+                market_data[ticker] = error_data
                 failed_tickers.append(ticker)
-                print(f"SIM {ticker}: Fallback pricing - ${fallback_data['price']:.2f}")
+                print(f"FAIL {ticker}: No price data available - returning error status")
                 
             except Exception as e:
                 print(f"ERROR {ticker}: All methods failed - {e}")
-                # Still provide fallback data
-                fallback_data = self._generate_fallback_price(ticker)
-                market_data[ticker] = fallback_data
+                # Return proper error status instead of fallback
+                error_data = {
+                    'ticker': ticker,
+                    'status': 'error',
+                    'error': f'API fetch failed: {str(e)}',
+                    'price': None,
+                    'change': None,
+                    'volume': None,
+                    'market_cap': None,
+                    'name': ticker,
+                    'currency': 'USD',
+                    'source': 'none',
+                    'timestamp': datetime.now(),
+                    'has_error': True
+                }
+                market_data[ticker] = error_data
                 failed_tickers.append(ticker)
         
         # Report success rate
@@ -221,13 +247,27 @@ class StableMarketDataService:
             except Exception as e:
                 print(f"Batch {i+1} failed: {e}")
                 
-                # Even if batch fails, add fallback prices for this batch
+                # Even if batch fails, add error status for this batch
                 for ticker in batch:
                     if ticker not in all_results:
-                        all_results[ticker] = self._generate_fallback_price(ticker)
+                        all_results[ticker] = {
+                            'ticker': ticker,
+                            'status': 'error',
+                            'error': f'Batch {i+1} failed: {str(e)}',
+                            'price': None,
+                            'change': None,
+                            'volume': None,
+                            'market_cap': None,
+                            'name': ticker,
+                            'currency': 'USD',
+                            'source': 'none',
+                            'timestamp': datetime.now(),
+                            'has_error': True
+                        }
         
-        success_count = len([r for r in all_results.values() if not r.get('is_estimated', False)])
-        print(f"Staggered fetch complete: {success_count}/{len(tickers)} real prices obtained")
+        success_count = len([r for r in all_results.values() if not r.get('has_error', False) and r.get('price') is not None])
+        error_count = len([r for r in all_results.values() if r.get('has_error', False)])
+        print(f"Staggered fetch complete: {success_count}/{len(tickers)} real prices obtained, {error_count} errors")
         
         return all_results
     

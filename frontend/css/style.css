@@ -672,3 +672,14 @@ select:focus-visible {
         border: 2px solid currentColor;
     }
 }
+
+/* Price Error Styling */
+.error-price {
+    color: #ff6b6b;
+    font-weight: 600;
+    background: rgba(255, 107, 107, 0.1);
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 107, 107, 0.3);
+    font-size: 0.9em;
+}

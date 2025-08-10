@@ -470,7 +470,9 @@ function updateHoldingsManagement() {
                             <td>${holding.quantity.toFixed(4)}</td>
                             <td>${formatCurrency(holding.avg_cost, holding.currency)}</td>
                             <td>${formatCurrency(holding.cost_basis, holding.currency)}</td>
-                            <td>${formatCurrency(holding.current_price, holding.currency)}</td>
+                            <td>${holding.price_error ? 
+                                '<span class="error-price">⚠️ Price Error</span>' : 
+                                formatCurrency(holding.current_price, holding.currency)}</td>
                             <td>${formatCurrency(holding.current_value, holding.currency)}</td>
                             <td class="${returnAmount >= 0 ? 'positive' : 'negative'}">
                                 ${formatCurrency(returnAmount, holding.currency)}
