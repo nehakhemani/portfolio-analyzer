@@ -2,8 +2,25 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Portfolio Analyzer</title>
+    
+    <!-- PWA Meta Tags -->
+    <meta name="application-name" content="Portfolio Analyzer">
+    <meta name="description" content="Professional portfolio analysis with multi-source market data">
+    <meta name="theme-color" content="#667eea">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Portfolio">
+    
+    <!-- Icons for PWA -->
+    <link rel="icon" type="image/png" sizes="32x32" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%23667eea' width='100' height='100' rx='20'/><text y='.9em' font-size='50' fill='white'>📊</text></svg>">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%23667eea' width='100' height='100' rx='20'/><text y='.9em' font-size='50' fill='white'>📊</text></svg>">
+    
+    <!-- Manifest -->
+    <link rel="manifest" href="manifest.json">
+    
+    <!-- Styles and Scripts -->
     <link rel="stylesheet" href="css/style.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
@@ -171,21 +188,23 @@
             <div class="recommendation-info" id="recommendationInfo" style="margin-bottom: 15px; padding: 10px; background: #f8f9fa; border-left: 4px solid #007bff; font-size: 14px;">
                 Choose your analysis method: <strong>Statistical ML</strong> uses transaction-based portfolio analysis and smart modeling, or <strong>Live Data + ML</strong> includes real market sentiment and news.
             </div>
-            <table id="recommendationsTable">
-                <thead>
-                    <tr>
-                        <th>Ticker</th>
-                        <th>Value</th>
-                        <th>Return</th>
-                        <th>Recommendation</th>
-                        <th>Action</th>
-                        <th>Rationale</th>
-                    </tr>
-                </thead>
-                <tbody id="recommendationsBody">
-                    <tr><td colspan="6">Upload portfolio and choose your ML analysis method above</td></tr>
-                </tbody>
-            </table>
+            <div class="table-container">
+                <table id="recommendationsTable">
+                    <thead>
+                        <tr>
+                            <th>Ticker</th>
+                            <th>Value</th>
+                            <th>Return</th>
+                            <th>Recommendation</th>
+                            <th>Action</th>
+                            <th>Rationale</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recommendationsBody">
+                        <tr><td colspan="6">Upload portfolio and choose your ML analysis method above</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </section>
         
         <!-- Charts -->
@@ -201,6 +220,82 @@
         </section>
     </div>
     
+    <!-- PWA Installation Banner -->
+    <div id="installBanner" style="display: none; position: fixed; bottom: 0; left: 0; right: 0; background: var(--primary-color); color: white; padding: 1rem; text-align: center; z-index: 1000;">
+        <div style="display: flex; align-items: center; justify-content: space-between; max-width: 600px; margin: 0 auto;">
+            <span>📱 Install Portfolio Analyzer for better experience!</span>
+            <div>
+                <button id="installBtn" style="background: white; color: var(--primary-color); border: none; padding: 0.5rem 1rem; border-radius: 4px; margin-right: 0.5rem; cursor: pointer;">Install</button>
+                <button id="dismissBtn" style="background: transparent; color: white; border: 1px solid white; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer;">Dismiss</button>
+            </div>
+        </div>
+    </div>
+    
     <script src="js/app.js"></script>
+    
+    <!-- PWA Service Worker Registration -->
+    <script>
+        // Register service worker for PWA functionality
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', async () => {
+                try {
+                    const registration = await navigator.serviceWorker.register('/sw.js', {
+                        scope: '/'
+                    });
+                    console.log('✅ SW registered:', registration.scope);
+                    
+                    // Check for updates
+                    registration.addEventListener('updatefound', () => {
+                        console.log('🔄 SW update found');
+                    });
+                    
+                } catch (error) {
+                    console.error('❌ SW registration failed:', error);
+                }
+            });
+            
+            // Handle PWA install prompt
+            let deferredPrompt;
+            
+            window.addEventListener('beforeinstallprompt', (e) => {
+                e.preventDefault();
+                deferredPrompt = e;
+                document.getElementById('installBanner').style.display = 'block';
+            });
+            
+            document.getElementById('installBtn').addEventListener('click', async () => {
+                if (deferredPrompt) {
+                    deferredPrompt.prompt();
+                    const { outcome } = await deferredPrompt.userChoice;
+                    console.log('PWA install outcome:', outcome);
+                    deferredPrompt = null;
+                    document.getElementById('installBanner').style.display = 'none';
+                }
+            });
+            
+            document.getElementById('dismissBtn').addEventListener('click', () => {
+                document.getElementById('installBanner').style.display = 'none';
+            });
+            
+            // Handle app shortcuts from PWA
+            const urlParams = new URLSearchParams(window.location.search);
+            const action = urlParams.get('action');
+            
+            if (action === 'add') {
+                // Auto-open add transaction form
+                setTimeout(() => {
+                    const addBtn = document.getElementById('addHoldingBtn');
+                    if (addBtn) addBtn.click();
+                }, 1000);
+            } else if (action === 'market') {
+                // Auto-fetch market data
+                setTimeout(() => {
+                    if (typeof fetchMarketData === 'function') {
+                        fetchMarketData();
+                    }
+                }, 1000);
+            }
+        }
+    </script>
 </body>
 </html>
