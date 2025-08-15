@@ -73,7 +73,10 @@ class TransactionPortfolioService:
                 print(f"Using cached/fallback pricing for {len(active_positions)} holdings...")
             
             for ticker, position in active_positions.items():
-                # Handle price fetch results
+                # STRICT RULE: Only calculate returns with REAL price data
+                # NO automatic fallbacks - user must provide manual prices
+                
+                current_price = None
                 price_error = False
                 error_message = None
                 
@@ -81,58 +84,67 @@ class TransactionPortfolioService:
                     ticker_data = market_data[ticker]
                     
                     if ticker_data.get('has_error', False):
-                        # Price fetch failed - use avg_cost for calculations but mark as error
-                        current_price = position['avg_cost']
+                        # Price fetch failed - NO FALLBACK, require manual price
                         price_error = True
                         error_message = ticker_data.get('error', 'Price fetch failed')
-                        print(f"❌ Price error for {ticker}: {error_message} - using avg_cost ${current_price:.2f}")
+                        print(f"ERROR PRICE {ticker}: {error_message} - manual price required")
                         
                     elif ticker_data.get('price', 0) > 0:
-                        # Success - valid price
+                        # Success - REAL price data available
                         current_price = float(ticker_data['price'])
-                        print(f"✓ Live price for {ticker}: ${current_price:.2f}")
+                        print(f"REAL PRICE {ticker}: ${current_price:.2f}")
                         
                     else:
-                        # No valid price - use avg_cost but mark as error
-                        current_price = position['avg_cost']
+                        # No valid price - NO FALLBACK, require manual price
                         price_error = True
                         error_message = "No valid price data available"
-                        print(f"⚠️  No valid price for {ticker}: using avg_cost ${current_price:.2f}")
+                        print(f"NO PRICE {ticker}: {error_message} - manual price required")
                 else:
-                    # No market data at all - use avg_cost but mark as error if prices were requested
-                    current_price = position['avg_cost']
-                    if fetch_prices:
-                        price_error = True
-                        error_message = "No market data available"
-                        print(f"⚠️  No data for {ticker}: using avg_cost ${current_price:.2f}")
+                    # No market data - NO FALLBACK, require manual price
+                    price_error = True
+                    error_message = "No market data available"
+                    print(f"NO DATA {ticker}: {error_message} - manual price required")
                 
-                # Calculate values
-                cost_basis = position['total_cost']
-                current_value = position['quantity'] * current_price
-                total_return = current_value - cost_basis
-                return_pct = (total_return / cost_basis * 100) if cost_basis > 0 else 0
+                # Only calculate returns when we have REAL price data
+                if current_price is not None and current_price > 0:
+                    # Calculate with real price
+                    cost_basis = position['total_cost']
+                    current_value = position['quantity'] * current_price
+                    total_return = current_value - cost_basis
+                    return_pct = (total_return / cost_basis * 100) if cost_basis > 0 else 0
+                else:
+                    # NO REAL PRICE = NO CALCULATION
+                    # Show user they need to set manual price
+                    cost_basis = position['total_cost']
+                    current_value = None  # Cannot calculate without real price
+                    total_return = None   # Cannot calculate without real price
+                    return_pct = None     # Cannot calculate without real price
                 
                 holding = {
                     'ticker': ticker,
                     'quantity': position['quantity'],
                     'avg_cost': position['avg_cost'],
                     'cost_basis': cost_basis,
-                    'current_price': current_price,
-                    'current_value': current_value,
-                    'total_return': total_return,
-                    'return_percentage': return_pct,
+                    'current_price': current_price,  # Can be None
+                    'current_value': current_value,  # Can be None
+                    'total_return': total_return,    # Can be None
+                    'return_percentage': return_pct, # Can be None
                     'currency': position['currency'],
                     'exchange': position.get('exchange', 'UNKNOWN'),
                     'price_error': price_error,
-                    'error_message': error_message
+                    'error_message': error_message,
+                    'needs_manual_price': price_error  # Flag to show manual price button
                 }
                 
                 holdings.append(holding)
                 total_cost_basis += cost_basis
-                total_current_value += current_value
+                
+                # Only add to total if we have real price data
+                if current_value is not None:
+                    total_current_value += current_value
             
-            # Sort by current value descending
-            holdings.sort(key=lambda x: x['current_value'], reverse=True)
+            # Sort by current value descending (handle None values)
+            holdings.sort(key=lambda x: x['current_value'] or 0, reverse=True)
             
             # Calculate portfolio summary
             portfolio_return = total_current_value - total_cost_basis

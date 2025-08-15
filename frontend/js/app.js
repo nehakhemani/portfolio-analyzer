@@ -494,6 +494,22 @@ function updateHoldingsManagement() {
                     const returnAmount = holding.total_return;
                     const returnPct = holding.return_percentage;
                     
+                    // Handle None values for missing price data
+                    const currentValueDisplay = holding.current_value !== null ? 
+                        formatCurrency(holding.current_value, holding.currency) : 
+                        '<span class="no-data">❌ No Price Data</span>';
+                    
+                    const returnDisplay = returnAmount !== null ? 
+                        formatCurrency(returnAmount, holding.currency) : 
+                        '<span class="no-data">❌ Set Price First</span>';
+                    
+                    const returnPctDisplay = returnPct !== null ? 
+                        `${returnPct.toFixed(1)}%` : 
+                        '<span class="no-data">❌ Set Price First</span>';
+                    
+                    const returnClass = returnAmount !== null ? 
+                        (returnAmount >= 0 ? 'positive' : 'negative') : 'no-data';
+                    
                     return `
                         <tr>
                             <td class="ticker">${holding.ticker}</td>
@@ -503,16 +519,16 @@ function updateHoldingsManagement() {
                             <td>${formatCurrency(holding.avg_cost, holding.currency)}</td>
                             <td>${formatCurrency(holding.cost_basis, holding.currency)}</td>
                             <td>${formatPriceWithStaleness(holding)}</td>
-                            <td>${formatCurrency(holding.current_value, holding.currency)}</td>
-                            <td class="${returnAmount >= 0 ? 'positive' : 'negative'}">
-                                ${formatCurrency(returnAmount, holding.currency)}
+                            <td>${currentValueDisplay}</td>
+                            <td class="${returnClass}">
+                                ${returnDisplay}
                             </td>
-                            <td class="${returnPct >= 0 ? 'positive' : 'negative'}">
-                                ${returnPct.toFixed(1)}%
+                            <td class="${returnClass}">
+                                ${returnPctDisplay}
                             </td>
                             <td>
                                 <div class="holding-actions">
-                                    <button onclick="showManualPriceDialog('${holding.ticker}', ${holding.current_price})" 
+                                    <button onclick="showManualPriceDialog('${holding.ticker}', ${holding.current_price || holding.avg_cost})" 
                                             class="manual-price-btn" 
                                             title="Set manual price for ${holding.ticker}">
                                         💰
@@ -585,8 +601,12 @@ function formatCurrency(amount, currency) {
 }
 
 function formatPriceWithStaleness(holding) {
-    if (holding.price_error) {
-        return '<span class="error-price">⚠️ Price Error</span>';
+    // STRICT: No price data = show manual price required
+    if (holding.needs_manual_price || holding.current_price === null || holding.current_price === undefined) {
+        return `<div class="price-display error-price">
+            <div class="price">❌ No Price Data</div>
+            <div class="staleness error">Click 💰 to set manual price</div>
+        </div>`;
     }
     
     const price = formatCurrency(holding.current_price, holding.currency);
@@ -601,7 +621,7 @@ function formatPriceWithStaleness(holding) {
         </div>`;
     }
     
-    if (!staleness || staleness === 'fresh') {
+    if (!staleness || staleness === 'live' || staleness === 'fresh') {
         return `<div class="price-display fresh-price">
             <div class="price">${price}</div>
             <div class="staleness fresh">✅ Live</div>
