@@ -18,11 +18,8 @@ from typing import Dict, List, Optional, Tuple
 
 class StableMarketDataService:
     def __init__(self, db_path='data/portfolio.db'):
-        self.memory_cache = {}
-        self.short_cache_duration = 300  # 5 minutes for active trading
-        self.long_cache_duration = 2592000  # 30 days for extended fallback
         self.db_path = db_path
-        self.last_fetch_attempts = {}
+        self.last_fetch_attempts = {}  # Rate limiting tracker
         
         # Multi-source API configuration
         self.api_sources = {
@@ -68,21 +65,7 @@ class StableMarketDataService:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS price_cache (
-                    ticker TEXT PRIMARY KEY,
-                    price REAL NOT NULL,
-                    change_pct REAL,
-                    volume INTEGER,
-                    market_cap INTEGER,
-                    currency TEXT DEFAULT 'USD',
-                    source TEXT DEFAULT 'yahoo',
-                    timestamp DATETIME NOT NULL,
-                    last_updated DATETIME NOT NULL,
-                    fetch_count INTEGER DEFAULT 1,
-                    reliability_score REAL DEFAULT 1.0
-                )
-            ''')
+# Old price_cache table removed - using new database structure
             
             # Price history table - central repository for all prices
             cursor.execute('''
@@ -134,7 +117,6 @@ class StableMarketDataService:
             ''')
             
             # Index for fast lookups
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_ticker_timestamp ON price_cache(ticker, timestamp)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_manual_ticker ON manual_prices(ticker)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_price_history_ticker_time ON price_history(ticker, timestamp DESC)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_current_prices_ticker ON current_prices(ticker)')
@@ -764,73 +746,7 @@ class StableMarketDataService:
         
         return None
     
-    def _store_in_memory(self, ticker: str, data: Dict):
-        """Store successful fetch in memory cache"""
-        self.memory_cache[ticker] = {
-            'data': data,
-            'timestamp': datetime.now()
-        }
-    
-    def _store_in_database(self, ticker: str, data: Dict):
-        """Store successful fetch in database for long-term caching"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            now = datetime.now()
-            
-            # Upsert the price data
-            cursor.execute('''
-                INSERT OR REPLACE INTO price_cache 
-                (ticker, price, change_pct, volume, market_cap, currency, source, timestamp, last_updated, fetch_count, reliability_score)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 
-                        COALESCE((SELECT fetch_count FROM price_cache WHERE ticker = ?) + 1, 1),
-                        COALESCE((SELECT reliability_score FROM price_cache WHERE ticker = ?) * 0.95 + 0.05, 1.0))
-            ''', (
-                ticker, data['price'], data.get('change', 0), data.get('volume', 0),
-                data.get('market_cap', 0), data.get('currency', 'USD'), 
-                data.get('source', 'yahoo'), now, now, ticker, ticker
-            ))
-            
-            conn.commit()
-            conn.close()
-            
-        except Exception as e:
-            print(f"Database store failed for {ticker}: {e}")
-    
-    def _get_from_database(self, ticker: str) -> Optional[Dict]:
-        """Retrieve cached price from database if recent enough"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Get most recent entry within cache duration
-            cursor.execute('''
-                SELECT ticker, price, change_pct, volume, market_cap, currency, source, timestamp, reliability_score
-                FROM price_cache 
-                WHERE ticker = ? AND timestamp > ?
-                ORDER BY timestamp DESC LIMIT 1
-            ''', (ticker, datetime.now() - timedelta(seconds=self.long_cache_duration)))
-            
-            row = cursor.fetchone()
-            conn.close()
-            
-            if row:
-                return {
-                    'price': float(row[1]),
-                    'change': float(row[2]) if row[2] else 0,
-                    'volume': int(row[3]) if row[3] else 0,
-                    'market_cap': int(row[4]) if row[4] else 0,
-                    'name': ticker,
-                    'currency': row[5] or 'USD',
-                    'source': f"{row[6]}_cached",
-                    'timestamp': datetime.fromisoformat(row[7]),
-                    'reliability_score': float(row[8]) if row[8] else 1.0
-                }
-        except Exception as e:
-            print(f"Database retrieve failed for {ticker}: {e}")
-        
-        return None
+# Legacy methods removed - using database-first architecture now
     
     def _get_from_database_extended(self, ticker: str) -> Optional[Dict]:
         """Retrieve cached price with extended 30-day duration and staleness indicators"""
@@ -1021,130 +937,7 @@ class StableMarketDataService:
             print(f"Failed to remove manual price for {ticker}: {e}")
             return False
     
-    def _generate_fallback_price(self, ticker: str) -> Dict:
-        """Use last known good price instead of random simulation"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Get most recent actual price (within last 30 days)
-            cursor.execute('''
-                SELECT price, change_pct, volume, market_cap, currency, timestamp, reliability_score
-                FROM price_cache 
-                WHERE ticker = ? AND timestamp > ? AND price > 0
-                ORDER BY timestamp DESC LIMIT 1
-            ''', (ticker, datetime.now() - timedelta(days=30)))
-            
-            result = cursor.fetchone()
-            conn.close()
-            
-            if result:
-                # Use last known good price
-                price, change_pct, volume, market_cap, currency, timestamp_str, reliability = result
-                last_update = datetime.fromisoformat(timestamp_str)
-                age_hours = (datetime.now() - last_update).total_seconds() / 3600
-                
-                return {
-                    'price': float(price),
-                    'change': float(change_pct) if change_pct else 0,
-                    'volume': int(volume) if volume else 0,
-                    'market_cap': int(market_cap) if market_cap else 0,
-                    'name': ticker,
-                    'currency': currency or 'USD',
-                    'source': 'cached_historical',
-                    'timestamp': last_update,
-                    'is_estimated': False,  # This is real historical data
-                    'data_age_hours': round(age_hours, 1),
-                    'reliability_score': float(reliability) if reliability else 0.8
-                }
-            else:
-                # No historical data - try to get a reasonable estimate
-                # But mark it clearly as estimated
-                base_price = self._get_reasonable_estimate(ticker)
-                
-                return {
-                    'price': base_price,
-                    'change': 0,
-                    'volume': 0,
-                    'market_cap': 0,
-                    'name': ticker,
-                    'currency': 'USD',
-                    'source': 'estimated',
-                    'timestamp': datetime.now(),
-                    'is_estimated': True,
-                    'reliability_score': 0.1,
-                    'note': 'No historical data available'
-                }
-                
-        except Exception as e:
-            print(f"Fallback price lookup failed for {ticker}: {e}")
-            
-            # Last resort - reasonable estimate
-            base_price = self._get_reasonable_estimate(ticker)
-            
-            return {
-                'price': base_price,
-                'change': 0,
-                'volume': 0,
-                'market_cap': 0,
-                'name': ticker,
-                'currency': 'USD',
-                'source': 'emergency_fallback',
-                'timestamp': datetime.now(),
-                'is_estimated': True,
-                'reliability_score': 0.05
-            }
-    
-    def _get_reasonable_estimate(self, ticker: str) -> float:
-        """Get a reasonable price estimate based on ticker characteristics - MUCH BETTER than random"""
-        # Known price ranges for common tickers (as of 2024)
-        ticker_upper = ticker.upper()
-        
-        # High-value tech stocks
-        if ticker_upper in ['TSLA', 'NVDA', 'GOOGL', 'GOOG']:
-            return 200.0  # Reasonable for these high-value stocks
-        elif ticker_upper in ['AAPL', 'MSFT', 'AMZN']:
-            return 180.0  # Apple/Microsoft range
-        elif ticker_upper in ['META', 'NFLX']:
-            return 400.0  # Meta/Netflix range
-        elif ticker_upper in ['SPY', 'QQQ']:
-            return 400.0  # Major ETFs
-        
-        # Exchange-specific estimates
-        elif ticker.endswith('.NZ'):
-            return 5.0  # New Zealand stocks typically lower
-        elif ticker.endswith('.AX'):
-            return 8.0  # Australian stocks
-        elif ticker.upper() in ['ANZ', 'RIO']:
-            return 120.0  # Major Australian stocks
-        
-        # ETFs and funds - order matters, specific tickers first
-        elif ticker_upper in ['SMH']:
-            return 200.0  # Semiconductor ETF - much higher
-        elif ticker_upper in ['IXJ', 'IXUS']:
-            return 65.0  # International ETFs
-        elif any(x in ticker_upper for x in ['ETF', 'FUND', 'INDEX']):
-            return 50.0  # General ETF range
-        
-        # Default by ticker length and pattern
-        elif len(ticker) <= 3:
-            return 100.0  # Major stocks usually 3 chars
-        elif len(ticker) == 4 and not any(x in ticker for x in '.'):
-            return 80.0  # Many 4-char tickers
-        else:
-            return 50.0  # Conservative default
-    
-    def _estimate_price_from_ticker(self, ticker: str) -> float:
-        """Legacy method - kept for compatibility"""
-        return self._get_reasonable_estimate(ticker)
-    
-    def _is_memory_cached(self, ticker: str) -> bool:
-        """Check if ticker is in fresh memory cache"""
-        if ticker not in self.memory_cache:
-            return False
-        
-        age = (datetime.now() - self.memory_cache[ticker]['timestamp']).total_seconds()
-        return age < self.short_cache_duration
+# All fallback and estimation methods removed - database-first only
     
     def _format_ticker_for_exchange(self, ticker: str, exchange: str = None) -> str:
         """Format ticker for Yahoo Finance exchange suffixes"""

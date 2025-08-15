@@ -288,7 +288,7 @@ def get_portfolio():
     from services.transaction_portfolio import TransactionPortfolioService
     
     portfolio_service = TransactionPortfolioService()
-    # Don't fetch prices automatically - use cached/fallback prices for speed
+    # Don't fetch prices automatically - use database-first approach for speed
     portfolio_data = portfolio_service.calculate_portfolio_from_transactions(app.config['DATABASE'], fetch_prices=False)
     
     if not portfolio_data['holdings']:
