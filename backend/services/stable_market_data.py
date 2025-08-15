@@ -84,6 +84,42 @@ class StableMarketDataService:
                 )
             ''')
             
+            # Price history table - central repository for all prices
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS price_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticker TEXT NOT NULL,
+                    price REAL NOT NULL,
+                    change_pct REAL,
+                    volume INTEGER,
+                    market_cap INTEGER,
+                    currency TEXT DEFAULT 'USD',
+                    source TEXT NOT NULL,  -- 'yahoo', 'manual', 'alpha_vantage', etc.
+                    timestamp DATETIME NOT NULL,
+                    is_manual BOOLEAN DEFAULT 0,
+                    notes TEXT,
+                    expires_at DATETIME,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Current prices view - latest price per ticker
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS current_prices (
+                    ticker TEXT PRIMARY KEY,
+                    price REAL NOT NULL,
+                    change_pct REAL,
+                    volume INTEGER,
+                    market_cap INTEGER,
+                    currency TEXT DEFAULT 'USD',
+                    source TEXT NOT NULL,
+                    timestamp DATETIME NOT NULL,
+                    is_manual BOOLEAN DEFAULT 0,
+                    notes TEXT,
+                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
             # Manual price override table - highest priority
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS manual_prices (
@@ -100,6 +136,9 @@ class StableMarketDataService:
             # Index for fast lookups
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_ticker_timestamp ON price_cache(ticker, timestamp)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_manual_ticker ON manual_prices(ticker)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_price_history_ticker_time ON price_history(ticker, timestamp DESC)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_current_prices_ticker ON current_prices(ticker)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_current_prices_timestamp ON current_prices(timestamp DESC)')
             conn.commit()
             conn.close()
             print("Price cache database initialized")
@@ -109,102 +148,247 @@ class StableMarketDataService:
     
     def fetch_batch_quotes(self, tickers: List[str], force_refresh: bool = False) -> Dict:
         """
-        Comprehensive hybrid pricing strategy:
-        1. Manual price overrides (highest priority)
-        2. Memory cache (5 min for live data)
-        3. Multi-source API fetch (Yahoo → Alpha Vantage → Finnhub → IEX → FMP)
-        4. Extended database cache (30 days with staleness indicators)
-        5. Error status for complete failures
+        DATABASE-FIRST pricing strategy:
+        1. Always read from database with timestamp-based staleness
+        2. Background sync handles API fetching separately
+        3. Manual overrides stored in database with highest priority
+        4. No live API calls during portfolio requests (much faster/reliable)
         """
         if not tickers:
             return {}
             
-        market_data = {}
-        failed_tickers = []
+        print(f"Database-first fetch for {len(tickers)} tickers")
         
-        print(f"Multi-source fetching for {len(tickers)} tickers (force_refresh={force_refresh})")
+        # Get all prices from database with staleness classification
+        market_data = self._get_prices_from_database(tickers)
+        
+        # Report staleness distribution
+        staleness_counts = {}
+        for ticker, data in market_data.items():
+            staleness = data.get('staleness_level', 'none')
+            staleness_counts[staleness] = staleness_counts.get(staleness, 0) + 1
+        
+        print(f"Price distribution: {staleness_counts}")
+        return market_data
+    
+    def _get_prices_from_database(self, tickers: List[str]) -> Dict:
+        """Get prices from database with timestamp-based staleness classification"""
+        market_data = {}
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            for ticker in tickers:
+                # Check for manual override first
+                cursor.execute('''
+                    SELECT price, currency, timestamp, notes, expires_at
+                    FROM manual_prices 
+                    WHERE ticker = ? AND (expires_at IS NULL OR expires_at > ?)
+                    ORDER BY timestamp DESC LIMIT 1
+                ''', (ticker, datetime.now()))
+                
+                manual_row = cursor.fetchone()
+                if manual_row:
+                    price, currency, timestamp_str, notes, expires_at = manual_row
+                    set_time = datetime.fromisoformat(timestamp_str)
+                    age_hours = (datetime.now() - set_time).total_seconds() / 3600
+                    
+                    market_data[ticker] = {
+                        'ticker': ticker,
+                        'price': float(price),
+                        'change': 0,
+                        'volume': 0,
+                        'market_cap': 0,
+                        'currency': currency or 'USD',
+                        'source': 'manual_override',
+                        'timestamp': set_time,
+                        'is_manual': True,
+                        'notes': notes,
+                        'staleness_level': 'manual',
+                        'data_age_hours': round(age_hours, 1),
+                        'data_age_str': self._format_age(age_hours)
+                    }
+                    print(f"MANUAL {ticker}: ${price:.2f} ({self._format_age(age_hours)})")
+                    continue
+                
+                # Get latest price from current_prices table
+                cursor.execute('''
+                    SELECT price, change_pct, volume, market_cap, currency, source, timestamp, is_manual, notes
+                    FROM current_prices 
+                    WHERE ticker = ?
+                    ORDER BY timestamp DESC LIMIT 1
+                ''', (ticker,))
+                
+                price_row = cursor.fetchone()
+                if price_row:
+                    price, change_pct, volume, market_cap, currency, source, timestamp_str, is_manual, notes = price_row
+                    price_time = datetime.fromisoformat(timestamp_str)
+                    age_hours = (datetime.now() - price_time).total_seconds() / 3600
+                    
+                    # Classify staleness based on timestamp
+                    staleness_level = self._classify_staleness(age_hours)
+                    
+                    market_data[ticker] = {
+                        'ticker': ticker,
+                        'price': float(price),
+                        'change': float(change_pct) if change_pct else 0,
+                        'volume': int(volume) if volume else 0,
+                        'market_cap': int(market_cap) if market_cap else 0,
+                        'currency': currency or 'USD',
+                        'source': source,
+                        'timestamp': price_time,
+                        'is_manual': bool(is_manual),
+                        'notes': notes,
+                        'staleness_level': staleness_level,
+                        'data_age_hours': round(age_hours, 1),
+                        'data_age_str': self._format_age(age_hours)
+                    }
+                    
+                    print(f"DB {ticker}: ${price:.2f} ({staleness_level}, {self._format_age(age_hours)}) [{source}]")
+                else:
+                    # No price data available
+                    market_data[ticker] = {
+                        'ticker': ticker,
+                        'status': 'error',
+                        'error': 'No price data available in database',
+                        'price': None,
+                        'change': None,
+                        'volume': None,
+                        'market_cap': None,
+                        'currency': 'USD',
+                        'source': 'none',
+                        'timestamp': datetime.now(),
+                        'has_error': True
+                    }
+                    print(f"ERROR {ticker}: No price data in database")
+            
+            conn.close()
+            
+        except Exception as e:
+            print(f"Database price fetch failed: {e}")
+            
+        return market_data
+    
+    def _classify_staleness(self, age_hours: float) -> str:
+        """Classify price staleness based on age in hours"""
+        if age_hours < 0.25:  # 15 minutes
+            return 'live'
+        elif age_hours < 4:   # 4 hours
+            return 'recent'
+        elif age_hours < 24:  # 1 day
+            return 'stale'
+        elif age_hours < 168: # 7 days
+            return 'very_stale'
+        else:
+            return 'ancient'
+    
+    def _format_age(self, age_hours: float) -> str:
+        """Format age in human-readable string"""
+        if age_hours < 1:
+            return f"{int(age_hours * 60)}m old"
+        elif age_hours < 24:
+            return f"{age_hours:.1f}h old"
+        else:
+            days = age_hours / 24
+            return f"{days:.1f}d old"
+    
+    def store_price_in_database(self, ticker: str, price_data: Dict) -> bool:
+        """Store price in both history and current_prices tables"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            now = datetime.now()
+            
+            # Store in price history
+            cursor.execute('''
+                INSERT INTO price_history 
+                (ticker, price, change_pct, volume, market_cap, currency, source, timestamp, is_manual, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                ticker,
+                price_data.get('price', 0),
+                price_data.get('change', 0),
+                price_data.get('volume', 0),
+                price_data.get('market_cap', 0),
+                price_data.get('currency', 'USD'),
+                price_data.get('source', 'unknown'),
+                price_data.get('timestamp', now),
+                price_data.get('is_manual', False),
+                price_data.get('notes')
+            ))
+            
+            # Update current_prices table
+            cursor.execute('''
+                INSERT OR REPLACE INTO current_prices
+                (ticker, price, change_pct, volume, market_cap, currency, source, timestamp, is_manual, notes, last_updated)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                ticker,
+                price_data.get('price', 0),
+                price_data.get('change', 0),
+                price_data.get('volume', 0),
+                price_data.get('market_cap', 0),
+                price_data.get('currency', 'USD'),
+                price_data.get('source', 'unknown'),
+                price_data.get('timestamp', now),
+                price_data.get('is_manual', False),
+                price_data.get('notes'),
+                now
+            ))
+            
+            conn.commit()
+            conn.close()
+            
+            print(f"Stored price: {ticker} = ${price_data.get('price', 0):.2f} [{price_data.get('source', 'unknown')}]")
+            return True
+            
+        except Exception as e:
+            print(f"Failed to store price for {ticker}: {e}")
+            return False
+    
+    def sync_prices_background(self, tickers: List[str]) -> Dict:
+        """Background method to fetch prices from APIs and store in database"""
+        print(f"Background sync starting for {len(tickers)} tickers...")
+        
+        sync_results = {
+            'success_count': 0,
+            'error_count': 0,
+            'tickers_updated': [],
+            'tickers_failed': []
+        }
         
         for ticker in tickers:
             try:
-                # Level 0: Manual price override (highest priority)
-                manual_data = self._get_manual_price(ticker)
-                if manual_data:
-                    market_data[ticker] = manual_data
-                    print(f"MANUAL {ticker}: User override - ${manual_data['price']:.2f} ({manual_data['data_age_str']})")
-                    continue
-                
-                # Level 1: Memory cache check
-                if not force_refresh and self._is_memory_cached(ticker):
-                    market_data[ticker] = self.memory_cache[ticker]['data']
-                    print(f"CACHE {ticker}: Memory cache")
-                    continue
-                
-                # Level 2: Try multi-source API fetch
+                # Try to fetch from APIs
                 fresh_data = self._fetch_from_best_source(ticker)
+                
                 if fresh_data and fresh_data.get('price', 0) > 0:
-                    # Success - store in both memory and database
-                    self._store_in_memory(ticker, fresh_data)
-                    self._store_in_database(ticker, fresh_data)
-                    market_data[ticker] = fresh_data
-                    print(f"LIVE {ticker}: Fresh {fresh_data.get('source', 'API')} data - ${fresh_data['price']:.2f}")
-                    continue
-                
-                # Level 3: Extended database cache (30 days) with staleness indicators
-                db_data = self._get_from_database_extended(ticker)
-                if db_data:
-                    market_data[ticker] = db_data
-                    age_str = db_data.get('data_age_str', 'unknown age')
-                    staleness = db_data.get('staleness_level', 'unknown')
-                    print(f"DB {ticker}: Extended cache ({age_str}, {staleness}) - ${db_data['price']:.2f}")
-                    continue
-                
-                # Level 4: Return error status instead of fallback
-                error_data = {
-                    'ticker': ticker,
-                    'status': 'error',
-                    'error': 'No price data available - all API sources failed',
-                    'price': None,
-                    'change': None,
-                    'volume': None,
-                    'market_cap': None,
-                    'name': ticker,
-                    'currency': 'USD',
-                    'source': 'none',
-                    'timestamp': datetime.now(),
-                    'has_error': True
-                }
-                market_data[ticker] = error_data
-                failed_tickers.append(ticker)
-                print(f"FAIL {ticker}: No price data available - returning error status")
+                    # Store in database
+                    fresh_data['timestamp'] = datetime.now()
+                    if self.store_price_in_database(ticker, fresh_data):
+                        sync_results['success_count'] += 1
+                        sync_results['tickers_updated'].append(ticker)
+                        print(f"SYNC ✓ {ticker}: ${fresh_data['price']:.2f} [{fresh_data.get('source')}]")
+                    else:
+                        sync_results['error_count'] += 1
+                        sync_results['tickers_failed'].append(ticker)
+                else:
+                    sync_results['error_count'] += 1
+                    sync_results['tickers_failed'].append(ticker)
+                    print(f"SYNC ✗ {ticker}: API fetch failed")
+                    
+                # Small delay to avoid rate limiting
+                time.sleep(0.5)
                 
             except Exception as e:
-                print(f"ERROR {ticker}: All methods failed - {e}")
-                # Return proper error status instead of fallback
-                error_data = {
-                    'ticker': ticker,
-                    'status': 'error',
-                    'error': f'API fetch failed: {str(e)}',
-                    'price': None,
-                    'change': None,
-                    'volume': None,
-                    'market_cap': None,
-                    'name': ticker,
-                    'currency': 'USD',
-                    'source': 'none',
-                    'timestamp': datetime.now(),
-                    'has_error': True
-                }
-                market_data[ticker] = error_data
-                failed_tickers.append(ticker)
+                sync_results['error_count'] += 1
+                sync_results['tickers_failed'].append(ticker)
+                print(f"SYNC ERROR {ticker}: {e}")
         
-        # Report success rate
-        success_rate = ((len(tickers) - len(failed_tickers)) / len(tickers)) * 100
-        print(f"SUCCESS: Price fetch success: {success_rate:.1f}% ({len(tickers)-len(failed_tickers)}/{len(tickers)})")
-        
-        if failed_tickers:
-            print(f"FAILED tickers: {', '.join(failed_tickers)}")
-        
-        return market_data
+        print(f"Background sync complete: {sync_results['success_count']} success, {sync_results['error_count']} failed")
+        return sync_results
     
     def fetch_batch_quotes_with_exchange(self, ticker_exchange_map: dict) -> Dict:
         """
@@ -764,15 +948,48 @@ class StableMarketDataService:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
+            now = datetime.now()
             expires_at = None
             if expires_hours:
-                expires_at = datetime.now() + timedelta(hours=expires_hours)
+                expires_at = now + timedelta(hours=expires_hours)
             
+            # Store in manual_prices table
             cursor.execute('''
                 INSERT OR REPLACE INTO manual_prices 
                 (ticker, price, currency, set_by, timestamp, notes, expires_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (ticker, price, currency, 'user', datetime.now(), notes, expires_at))
+            ''', (ticker, price, currency, 'user', now, notes, expires_at))
+            
+            # Also store in current_prices and price_history for consistency
+            price_data = {
+                'price': price,
+                'change': 0,
+                'volume': 0,
+                'market_cap': 0,
+                'currency': currency,
+                'source': 'manual_override',
+                'timestamp': now,
+                'is_manual': True,
+                'notes': notes
+            }
+            
+            # Store in price history
+            cursor.execute('''
+                INSERT INTO price_history 
+                (ticker, price, change_pct, volume, market_cap, currency, source, timestamp, is_manual, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                ticker, price, 0, 0, 0, currency, 'manual_override', now, True, notes
+            ))
+            
+            # Update current_prices
+            cursor.execute('''
+                INSERT OR REPLACE INTO current_prices
+                (ticker, price, change_pct, volume, market_cap, currency, source, timestamp, is_manual, notes, last_updated)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                ticker, price, 0, 0, 0, currency, 'manual_override', now, True, notes, now
+            ))
             
             conn.commit()
             conn.close()

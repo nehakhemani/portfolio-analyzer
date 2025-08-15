@@ -1081,6 +1081,42 @@ def get_manual_prices():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/sync-prices', methods=['POST'])
+@require_auth
+def sync_prices_background():
+    """Background sync prices from APIs to database"""
+    try:
+        # Get tickers from request or use portfolio tickers
+        data = request.get_json() or {}
+        tickers = data.get('tickers', [])
+        
+        if not tickers:
+            # Get all tickers from current portfolio
+            from services.transaction_portfolio import TransactionPortfolioService
+            portfolio_service = TransactionPortfolioService()
+            portfolio_data = portfolio_service.calculate_portfolio_from_transactions(app.config['DATABASE'], fetch_prices=False)
+            
+            if portfolio_data and portfolio_data.get('holdings'):
+                tickers = [holding['ticker'] for holding in portfolio_data['holdings']]
+        
+        if not tickers:
+            return jsonify({'error': 'No tickers to sync'}), 400
+        
+        print(f"Starting background price sync for {len(tickers)} tickers...")
+        
+        # Use market service to sync prices
+        sync_results = market_service.sync_prices_background(tickers)
+        
+        return jsonify({
+            'message': 'Price sync completed',
+            'results': sync_results,
+            'sync_timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        print(f"Price sync error: {e}")
+        return jsonify({'error': str(e)}), 500
+
 # Add this right before if __name__ == '__main__':
 print("\nRegistered routes:")
 for rule in app.url_map.iter_rules():

@@ -265,6 +265,38 @@ async function fetchMarketData() {
     }
 }
 
+async function syncPricesBackground() {
+    console.log('Starting background price sync...');
+    const btn = document.getElementById('syncPricesBtn');
+    btn.textContent = 'Syncing Prices...';
+    btn.disabled = true;
+    
+    try {
+        const response = await authenticatedFetch(`${API_BASE}/sync-prices`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({}) // Empty body - will use portfolio tickers
+        });
+        
+        if (response && response.ok) {
+            const data = await response.json();
+            console.log('Price sync response:', data);
+            const results = data.results;
+            alert(`Price sync completed!\nUpdated: ${results.success_count} tickers\nFailed: ${results.error_count} tickers`);
+            // Reload portfolio to show updated prices
+            await loadPortfolio();
+        }
+    } catch (error) {
+        console.error('Price sync error:', error);
+        alert('Error syncing prices: ' + error.message);
+    } finally {
+        btn.textContent = 'Sync Prices';
+        btn.disabled = false;
+    }
+}
+
 
 async function exportData() {
     console.log('Exporting data...');
