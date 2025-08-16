@@ -18,23 +18,31 @@ class RecommendationEngine:
         
         for _, holding in holdings_df.iterrows():
             ticker = holding['ticker']
-            start_value = holding['start_value']
-            end_value = holding['end_value']
             
-            # Calculate return
-            if start_value > 0:
-                return_pct = ((end_value - start_value) / start_value) * 100
+            # Handle both old and new data formats for backward compatibility
+            if 'current_value' in holding:
+                # New simplified workflow format
+                current_value = holding.get('current_value', 0) or 0
+                cost_basis = holding.get('cost_basis', 0) or 0
+                return_pct = holding.get('return_percentage', 0) or 0
             else:
-                return_pct = 0 if end_value == 0 else 100
+                # Legacy format
+                current_value = holding.get('end_value', 0) or 0
+                cost_basis = holding.get('start_value', 0) or 0
+                # Calculate return
+                if cost_basis > 0:
+                    return_pct = ((current_value - cost_basis) / cost_basis) * 100
+                else:
+                    return_pct = 0 if current_value == 0 else 100
             
             # Generate recommendation
             rec = self._get_recommendation(
-                ticker, return_pct, start_value, end_value, holding
+                ticker, return_pct, cost_basis, current_value, holding
             )
             
             recommendations.append({
                 'ticker': ticker,
-                'current_value': round(end_value, 2),
+                'current_value': round(current_value, 2),
                 'return_percentage': round(return_pct, 2),
                 'recommendation': rec['recommendation'],
                 'action': rec['action'],
@@ -45,11 +53,11 @@ class RecommendationEngine:
         
         return recommendations
     
-    def _get_recommendation(self, ticker, return_pct, start_value, end_value, holding):
+    def _get_recommendation(self, ticker, return_pct, cost_basis, current_value, holding):
         """Generate specific recommendation for a holding"""
         
         # Handle closed positions
-        if end_value == 0 and start_value > 0:
+        if current_value == 0 and cost_basis > 0:
             return {
                 'recommendation': 'CLOSED',
                 'action': 'Position Closed',

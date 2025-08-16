@@ -48,9 +48,23 @@ class MLRecommendationEngine:
             # Basic features
             current_price = hist['Close'].iloc[-1]
             
+            # Handle both old and new data formats for backward compatibility
+            if 'current_value' in holding:
+                # New simplified workflow format
+                current_value = holding.get('current_value', 0) or 0
+                cost_basis = holding.get('cost_basis', 0) or 0
+                current_return = holding.get('return_percentage', 0) or 0
+                dividends = 0  # Not tracked in new format
+            else:
+                # Legacy format
+                current_value = holding.get('end_value', 0) or 0
+                cost_basis = holding.get('start_value', 0) or 0
+                current_return = ((current_value - cost_basis) / cost_basis * 100) if cost_basis > 0 else 0
+                dividends = holding.get('dividends', 0) or 0
+            
             features = {
-                'current_return': ((holding['end_value'] - holding['start_value']) / holding['start_value'] * 100) if holding['start_value'] > 0 else 0,
-                'dividend_yield': (holding['dividends'] / holding['start_value'] * 100) if holding['start_value'] > 0 else 0,
+                'current_return': current_return,
+                'dividend_yield': (dividends / cost_basis * 100) if cost_basis > 0 else 0,
                 'has_live_data': True
             }
             
@@ -72,9 +86,23 @@ class MLRecommendationEngine:
         except Exception as e:
             print(f"Could not fetch live data for {ticker}: {e}")
             # Return basic features without live data
+            # Handle both old and new data formats for backward compatibility
+            if 'current_value' in holding:
+                # New simplified workflow format
+                current_value = holding.get('current_value', 0) or 0
+                cost_basis = holding.get('cost_basis', 0) or 0
+                current_return = holding.get('return_percentage', 0) or 0
+                dividends = 0  # Not tracked in new format
+            else:
+                # Legacy format
+                current_value = holding.get('end_value', 0) or 0
+                cost_basis = holding.get('start_value', 0) or 0
+                current_return = ((current_value - cost_basis) / cost_basis * 100) if cost_basis > 0 else 0
+                dividends = holding.get('dividends', 0) or 0
+            
             return {
-                'current_return': ((holding['end_value'] - holding['start_value']) / holding['start_value'] * 100) if holding['start_value'] > 0 else 0,
-                'dividend_yield': (holding['dividends'] / holding['start_value'] * 100) if holding['start_value'] > 0 else 0,
+                'current_return': current_return,
+                'dividend_yield': (dividends / cost_basis * 100) if cost_basis > 0 else 0,
                 'price_change_5d': 0,
                 'volatility': 20,
                 'has_live_data': False
@@ -159,9 +187,12 @@ class MLRecommendationEngine:
         if abs(return_pct) > 50:
             confidence += 10
         
+        # Use appropriate value field based on data format
+        current_value = holding.get('current_value') or holding.get('end_value', 0) or 0
+        
         return {
             'ticker': ticker,
-            'current_value': round(holding['end_value'], 2),
+            'current_value': round(current_value, 2),
             'return_percentage': round(return_pct, 2),
             'recommendation': action,
             'action': action_label,

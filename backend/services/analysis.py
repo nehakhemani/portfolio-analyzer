@@ -6,20 +6,32 @@ class PortfolioAnalyzer:
     def analyze_portfolio(self, holdings_df: pd.DataFrame) -> Dict[str, Any]:
         """Perform comprehensive portfolio analysis"""
         
+        # Handle both old and new data formats for backward compatibility
+        if 'current_value' in holdings_df.columns:
+            # New simplified workflow format
+            value_col = 'current_value'
+            cost_col = 'cost_basis'
+        else:
+            # Legacy format
+            value_col = 'end_value'
+            cost_col = 'start_value'
+        
         # Basic metrics
-        total_value = holdings_df['end_value'].sum()
-        total_start_value = holdings_df['start_value'].sum()
+        total_value = holdings_df[value_col].sum()
+        total_start_value = holdings_df[cost_col].sum()
         total_return = total_value - total_start_value
         return_pct = (total_return / total_start_value * 100) if total_start_value > 0 else 0
         
         # Exchange allocation (using exchange as proxy for geographic/market allocation)
-        exchange_allocation = holdings_df.groupby('exchange')['end_value'].sum().to_dict()
+        exchange_allocation = holdings_df.groupby('exchange')[value_col].sum().to_dict()
         
         # Risk metrics
         returns = []
         for _, holding in holdings_df.iterrows():
-            if holding['start_value'] > 0:
-                ret = ((holding['end_value'] - holding['start_value']) / holding['start_value'])
+            cost_basis = holding.get(cost_col, 0) or 0
+            current_value = holding.get(value_col, 0) or 0
+            if cost_basis > 0:
+                ret = ((current_value - cost_basis) / cost_basis)
                 returns.append(ret)
         
         returns_array = np.array(returns)
@@ -27,7 +39,7 @@ class PortfolioAnalyzer:
         
         # Concentration risk
         if total_value > 0:
-            holdings_pct = (holdings_df['end_value'] / total_value * 100)
+            holdings_pct = (holdings_df[value_col] / total_value * 100)
             max_concentration = holdings_pct.max() if len(holdings_pct) > 0 else 0
         else:
             max_concentration = 0
@@ -35,8 +47,8 @@ class PortfolioAnalyzer:
         # Winners and losers - create a copy to avoid modifying original DataFrame
         holdings_copy = holdings_df.copy()
         holdings_copy['return_pct'] = holdings_copy.apply(
-            lambda x: ((x['end_value'] - x['start_value']) / x['start_value'] * 100) 
-            if x['start_value'] > 0 else 0, axis=1
+            lambda x: ((x.get(value_col, 0) - x.get(cost_col, 0)) / x.get(cost_col, 1) * 100) 
+            if x.get(cost_col, 0) > 0 else 0, axis=1
         )
         
         top_performers = holdings_copy.nlargest(5, 'return_pct')[['ticker', 'return_pct']].to_dict('records')

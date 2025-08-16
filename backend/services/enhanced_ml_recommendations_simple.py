@@ -86,12 +86,27 @@ class EnhancedMLRecommendationEngine:
     
     def extract_comprehensive_features(self, ticker: str, holding: dict) -> dict:
         """Extract comprehensive features for statistical ML analysis (no API calls)"""
+        
+        # Handle both old and new data formats for backward compatibility
+        if 'current_value' in holding:
+            # New simplified workflow format
+            current_value = holding.get('current_value', 0) or 0
+            cost_basis = holding.get('cost_basis', 0) or 0
+            current_return = holding.get('return_percentage', 0) or 0
+            dividends = 0  # Not tracked in new format
+        else:
+            # Legacy format
+            current_value = holding.get('end_value', 0) or 0
+            cost_basis = holding.get('start_value', 0) or 0
+            current_return = ((current_value - cost_basis) / cost_basis * 100) if cost_basis > 0 else 0
+            dividends = holding.get('dividends', 0) or 0
+        
         features = {
             'ticker': ticker,
-            'current_return': ((holding['end_value'] - holding['start_value']) / holding['start_value'] * 100) if holding['start_value'] > 0 else 0,
-            'dividend_yield': (holding['dividends'] / holding['start_value'] * 100) if holding['start_value'] > 0 else 0,
-            'position_size': holding['end_value'],
-            'has_live_data': False
+            'current_return': current_return,
+            'dividend_yield': (dividends / cost_basis * 100) if cost_basis > 0 else 0,
+            'position_size': current_value,
+            'has_live_data': holding.get('current_price') is not None
         }
         
         # For Statistical ML Analysis - use only portfolio-based estimates
@@ -537,9 +552,12 @@ class EnhancedMLRecommendationEngine:
         # Calculate confidence
         confidence = self.calculate_confidence(features, risk_score, ml_scores['ensemble'])
         
+        # Use appropriate value field based on data format
+        current_value = holding.get('current_value') or holding.get('end_value', 0) or 0
+        
         return {
             'ticker': ticker,
-            'current_value': round(holding['end_value'], 2),
+            'current_value': round(current_value, 2),
             'return_percentage': round(return_pct, 2),
             'recommendation': recommendation['action'],
             'action': recommendation['label'],
