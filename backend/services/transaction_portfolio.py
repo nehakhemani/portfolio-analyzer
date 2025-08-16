@@ -65,7 +65,7 @@ class TransactionPortfolioService:
                 # Try batch fetch with retries and timeout
                 try:
                     market_data = self._fetch_prices_with_retry(ticker_exchange_map, max_retries=50)
-                    print(f"✓ Batch market data: {len(market_data)} successful out of {len(ticker_exchange_map)}")
+                    print(f"SUCCESS Batch market data: {len(market_data)} successful out of {len(ticker_exchange_map)}")
                 except Exception as e:
                     print(f"⚠ Batch fetch failed: {e}")
                     market_data = {}
@@ -268,11 +268,11 @@ class TransactionPortfolioService:
                         if ticker_data.get('has_error', False):
                             # Price fetch failed - record the error
                             market_data[ticker] = ticker_data
-                            print(f"❌ Price error: {ticker} - {ticker_data.get('error', 'Unknown error')}")
+                            print(f"ERROR Price error: {ticker} - {ticker_data.get('error', 'Unknown error')}")
                         elif ticker_data.get('price', 0) > 0:
                             # Success - valid price
                             market_data[ticker] = ticker_data
-                            print(f"✓ Retry success: {ticker}")
+                            print(f"SUCCESS Retry success: {ticker}")
                         else:
                             new_failed.append(ticker)
                     else:

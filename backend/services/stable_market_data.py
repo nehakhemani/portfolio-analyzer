@@ -1,9 +1,9 @@
 """
 Stable Market Data Service - Multi-Source with Enhanced Reliability
 Production-ready price fetching with multiple APIs, caching & validation
-Phase 1: Enhanced caching & database persistence ✓
-Phase 2: Multi-source API fallbacks ✓
-Phase 3: Smart source rotation & validation ✓
+Phase 1: Enhanced caching & database persistence [DONE]
+Phase 2: Multi-source API fallbacks [DONE]
+Phase 3: Smart source rotation & validation [DONE]
 """
 import yfinance as yf
 import requests
@@ -352,14 +352,14 @@ class StableMarketDataService:
                     if self.store_price_in_database(ticker, fresh_data):
                         sync_results['success_count'] += 1
                         sync_results['tickers_updated'].append(ticker)
-                        print(f"SYNC ✓ {ticker}: ${fresh_data['price']:.2f} [{fresh_data.get('source')}]")
+                        print(f"SYNC SUCCESS {ticker}: ${fresh_data['price']:.2f} [{fresh_data.get('source')}]")
                     else:
                         sync_results['error_count'] += 1
                         sync_results['tickers_failed'].append(ticker)
                 else:
                     sync_results['error_count'] += 1
                     sync_results['tickers_failed'].append(ticker)
-                    print(f"SYNC ✗ {ticker}: API fetch failed")
+                    print(f"SYNC ERROR {ticker}: API fetch failed")
                     
                 # Small delay to avoid rate limiting
                 time.sleep(0.5)
@@ -746,274 +746,33 @@ class StableMarketDataService:
         
         return None
     
-# Legacy methods removed - using database-first architecture now
-    
-    def _get_from_database_extended(self, ticker: str) -> Optional[Dict]:
-        """Retrieve cached price with extended 30-day duration and staleness indicators"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Get most recent entry within extended cache duration (30 days)
-            cursor.execute('''
-                SELECT ticker, price, change_pct, volume, market_cap, currency, source, timestamp, reliability_score
-                FROM price_cache 
-                WHERE ticker = ? AND timestamp > ?
-                ORDER BY timestamp DESC LIMIT 1
-            ''', (ticker, datetime.now() - timedelta(seconds=self.long_cache_duration)))
-            
-            row = cursor.fetchone()
-            conn.close()
-            
-            if row:
-                last_update = datetime.fromisoformat(row[7])
-                age_hours = (datetime.now() - last_update).total_seconds() / 3600
-                age_days = age_hours / 24
-                
-                # Determine staleness level and create user-friendly age string
-                if age_hours < 1:
-                    staleness = 'fresh'
-                    age_str = f"{int(age_hours * 60)}m old"
-                elif age_hours < 24:
-                    staleness = 'recent'
-                    age_str = f"{age_hours:.1f}h old"
-                elif age_days < 7:
-                    staleness = 'stale'
-                    age_str = f"{age_days:.1f}d old"
-                else:
-                    staleness = 'very_stale'
-                    age_str = f"{age_days:.0f}d old"
-                
-                return {
-                    'price': float(row[1]),
-                    'change': float(row[2]) if row[2] else 0,
-                    'volume': int(row[3]) if row[3] else 0,
-                    'market_cap': int(row[4]) if row[4] else 0,
-                    'name': ticker,
-                    'currency': row[5] or 'USD',
-                    'source': f"{row[6]}_extended_cache",
-                    'timestamp': last_update,
-                    'reliability_score': float(row[8]) if row[8] else 1.0,
-                    'data_age_hours': round(age_hours, 1),
-                    'data_age_str': age_str,
-                    'staleness_level': staleness,
-                    'is_extended_cache': True
-                }
-        except Exception as e:
-            print(f"Extended database retrieve failed for {ticker}: {e}")
-        
-        return None
-    
-    def _get_manual_price(self, ticker: str) -> Optional[Dict]:
-        """Get manual price override if available and not expired"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                SELECT ticker, price, currency, set_by, timestamp, notes, expires_at
-                FROM manual_prices 
-                WHERE ticker = ? AND (expires_at IS NULL OR expires_at > ?)
-                ORDER BY timestamp DESC LIMIT 1
-            ''', (ticker, datetime.now()))
-            
-            row = cursor.fetchone()
-            conn.close()
-            
-            if row:
-                ticker, price, currency, set_by, timestamp_str, notes, expires_at = row
-                set_time = datetime.fromisoformat(timestamp_str)
-                age_hours = (datetime.now() - set_time).total_seconds() / 3600
-                age_days = age_hours / 24
-                
-                # Create age string
-                if age_hours < 1:
-                    age_str = f"{int(age_hours * 60)}m old"
-                elif age_days < 1:
-                    age_str = f"{age_hours:.1f}h old" 
-                else:
-                    age_str = f"{age_days:.1f}d old"
-                
-                return {
-                    'price': float(price),
-                    'change': 0,  # Manual prices don't have change data
-                    'volume': 0,
-                    'market_cap': 0,
-                    'name': ticker,
-                    'currency': currency or 'USD',
-                    'source': 'manual_override',
-                    'timestamp': set_time,
-                    'is_manual': True,
-                    'set_by': set_by,
-                    'notes': notes,
-                    'data_age_hours': round(age_hours, 1),
-                    'data_age_str': age_str,
-                    'staleness_level': 'manual',
-                    'reliability_score': 1.0  # Manual prices are fully reliable
-                }
-                
-        except Exception as e:
-            print(f"Manual price lookup failed for {ticker}: {e}")
-        
-        return None
-    
-    def set_manual_price(self, ticker: str, price: float, currency: str = 'USD', 
-                        notes: str = None, expires_hours: int = None) -> bool:
-        """Set manual price override for a ticker"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            now = datetime.now()
-            expires_at = None
-            if expires_hours:
-                expires_at = now + timedelta(hours=expires_hours)
-            
-            # Store in manual_prices table
-            cursor.execute('''
-                INSERT OR REPLACE INTO manual_prices 
-                (ticker, price, currency, set_by, timestamp, notes, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (ticker, price, currency, 'user', now, notes, expires_at))
-            
-            # Also store in current_prices and price_history for consistency
-            price_data = {
-                'price': price,
-                'change': 0,
-                'volume': 0,
-                'market_cap': 0,
-                'currency': currency,
-                'source': 'manual_override',
-                'timestamp': now,
-                'is_manual': True,
-                'notes': notes
-            }
-            
-            # Store in price history
-            cursor.execute('''
-                INSERT INTO price_history 
-                (ticker, price, change_pct, volume, market_cap, currency, source, timestamp, is_manual, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                ticker, price, 0, 0, 0, currency, 'manual_override', now, True, notes
-            ))
-            
-            # Update current_prices
-            cursor.execute('''
-                INSERT OR REPLACE INTO current_prices
-                (ticker, price, change_pct, volume, market_cap, currency, source, timestamp, is_manual, notes, last_updated)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                ticker, price, 0, 0, 0, currency, 'manual_override', now, True, notes, now
-            ))
-            
-            conn.commit()
-            conn.close()
-            
-            print(f"Manual price set: {ticker} = ${price:.2f}")
-            return True
-            
-        except Exception as e:
-            print(f"Failed to set manual price for {ticker}: {e}")
-            return False
-    
-    def remove_manual_price(self, ticker: str) -> bool:
-        """Remove manual price override for a ticker"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute('DELETE FROM manual_prices WHERE ticker = ?', (ticker,))
-            deleted = cursor.rowcount > 0
-            
-            conn.commit()
-            conn.close()
-            
-            if deleted:
-                print(f"Manual price removed for {ticker}")
-            return deleted
-            
-        except Exception as e:
-            print(f"Failed to remove manual price for {ticker}: {e}")
-            return False
-    
-# All fallback and estimation methods removed - database-first only
+# All legacy methods removed - using database-first architecture only
     
     def _format_ticker_for_exchange(self, ticker: str, exchange: str = None) -> str:
         """Format ticker for Yahoo Finance exchange suffixes"""
-        if '.' in ticker:  # Already has suffix
+        if not exchange:
             return ticker
             
-        # Common exchange mappings
+        # Yahoo Finance exchange suffix mappings
         exchange_suffixes = {
-            'NZX': '.NZ', 'ASX': '.AX', 'LSE': '.L', 
-            'TSX': '.TO', 'TSE': '.T'
+            'NZX': '.NZ',        # New Zealand Exchange
+            'ASX': '.AX',        # Australian Securities Exchange  
+            'LSE': '.L',         # London Stock Exchange
+            'TSX': '.TO',        # Toronto Stock Exchange
+            'TSE': '.T',         # Tokyo Stock Exchange
+            'NASDAQ': '',        # No suffix needed
+            'NYSE': '',          # No suffix needed
+            'AMEX': '',          # No suffix needed
         }
         
-        if exchange and exchange.upper() in exchange_suffixes:
-            return f"{ticker}{exchange_suffixes[exchange.upper()]}"
+        # Get the appropriate suffix
+        suffix = exchange_suffixes.get(exchange.upper(), '')
+        
+        # Only add suffix if ticker doesn't already have one
+        if suffix and '.' not in ticker:
+            return f"{ticker}{suffix}"
         
         return ticker
-    
-    def get_cache_stats(self) -> Dict:
-        """Get comprehensive cache and API source statistics"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Basic cache stats
-            cursor.execute('SELECT COUNT(*), AVG(reliability_score), MAX(timestamp) FROM price_cache')
-            stats = cursor.fetchone()
-            
-            cursor.execute('SELECT COUNT(*) FROM price_cache WHERE timestamp > ?', 
-                         (datetime.now() - timedelta(hours=1),))
-            recent_count = cursor.fetchone()[0]
-            
-            # Source usage statistics
-            cursor.execute('''
-                SELECT source, COUNT(*), AVG(price), MAX(timestamp)
-                FROM price_cache 
-                WHERE timestamp > ?
-                GROUP BY source
-                ORDER BY COUNT(*) DESC
-            ''', (datetime.now() - timedelta(days=1),))
-            
-            source_stats = {}
-            for row in cursor.fetchall():
-                source_stats[row[0] or 'unknown'] = {
-                    'requests_24h': row[1],
-                    'avg_price': round(row[2] or 0, 2),
-                    'last_used': row[3] or 'Never'
-                }
-            
-            conn.close()
-            
-            # API source health
-            api_health = {}
-            for source, config in self.api_sources.items():
-                usage = self.api_usage.get(source, {'count': 0, 'last_reset': datetime.now()})
-                api_health[source] = {
-                    'name': config['name'],
-                    'reliability': round(config['reliability'], 3),
-                    'consecutive_failures': config['consecutive_failures'],
-                    'usage_count': usage['count'],
-                    'rate_limit': config['rate_limit'],
-                    'last_success': config['last_success'].isoformat() if config['last_success'] else 'Never',
-                    'available': config['consecutive_failures'] < 5
-                }
-            
-            return {
-                'total_cached_tickers': stats[0] or 0,
-                'average_reliability': round(stats[1] or 0, 2),
-                'last_update': stats[2] or 'Never',
-                'recent_updates': recent_count or 0,
-                'memory_cache_size': len(self.memory_cache),
-                'api_sources': api_health,
-                'source_usage': source_stats,
-                'system_version': 'Multi-Source Stable v2.0'
-            }
-        except:
-            return {'error': 'Could not retrieve cache stats'}
     
     def cleanup_old_cache(self, days_old: int = 7):
         """Clean up old cache entries to keep database size manageable"""
@@ -1022,7 +781,7 @@ class StableMarketDataService:
             cursor = conn.cursor()
             
             cutoff_date = datetime.now() - timedelta(days=days_old)
-            cursor.execute('DELETE FROM price_cache WHERE timestamp < ?', (cutoff_date,))
+            cursor.execute('DELETE FROM price_history WHERE timestamp < ?', (cutoff_date,))
             
             deleted_count = cursor.rowcount
             conn.commit()

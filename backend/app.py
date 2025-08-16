@@ -346,14 +346,11 @@ def upload_test():
 @app.route('/api/upload', methods=['POST'])
 @require_auth
 def upload_portfolio():
-    """Upload new portfolio CSV"""
+    """NEW WORKFLOW: Upload CSV -> Extract Tickers -> Fetch Prices -> Calculate Returns"""
     try:
         # Ensure database is initialized before upload
         init_db()
-        print("Database initialized before upload")
-        print("Upload endpoint called")
-        print(f"Request files: {list(request.files.keys())}")
-        print(f"Request form: {list(request.form.keys())}")
+        print("=== NEW PORTFOLIO WORKFLOW STARTED ===")
         
         if 'file' not in request.files:
             print("No file provided in request")
@@ -366,97 +363,57 @@ def upload_portfolio():
             print("Empty filename")
             return jsonify({'error': 'No file selected'}), 400
         
-        if file and file.filename.endswith('.csv'):
-            print("Processing CSV file...")
-            try:
-                # Parse CSV and store individual transactions
-                import pandas as pd
-                import io
-                
-                # Read CSV content
-                content = file.read().decode('utf-8')
-                df = pd.read_csv(io.StringIO(content))
-                
-                # Check if it's transaction format or portfolio format
-                transaction_columns = ['Trade date', 'Instrument code', 'Transaction type', 'Quantity', 'Price']
-                is_transaction_format = all(col in df.columns for col in transaction_columns)
-                
-                print(f"CSV columns: {list(df.columns)}")
-                print(f"Required transaction columns: {transaction_columns}")
-                print(f"Is transaction format: {is_transaction_format}")
-                
-                conn = sqlite3.connect(app.config['DATABASE'])
-                cursor = conn.cursor()
-                
-                if not is_transaction_format:
-                    conn.close()
-                    return jsonify({'error': 'Invalid CSV format. Please upload a transaction CSV with columns: Trade date, Instrument code, Transaction type, Quantity, Price'}), 400
-                
-                print(f"Processing transaction format CSV with {len(df)} transactions")
-                
-                # Clear existing data
-                cursor.execute("DELETE FROM transactions")
-                cursor.execute("DELETE FROM holdings")  # Also clear old holdings
-                print("Cleared existing transactions and holdings")
-                
-                # Clean up dates
-                df['Trade date'] = df['Trade date'].astype(str).str.replace(r'\s+\(UTC\)', '', regex=True)
-                df['Trade date'] = pd.to_datetime(df['Trade date'], errors='coerce')
-                # Convert to string for SQLite compatibility, handle NaT values
-                df['Trade date'] = df['Trade date'].dt.strftime('%Y-%m-%d %H:%M:%S').fillna('1970-01-01 00:00:00')
-                
-                # Insert transactions
-                transaction_count = 0
-                for _, transaction in df.iterrows():
-                    try:
-                        cursor.execute('''
-                            INSERT INTO transactions 
-                            (ticker, exchange, currency, transaction_type, quantity, price, amount, fees, trade_date)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ''', (
-                            str(transaction.get('Instrument code', '')).upper(),
-                            str(transaction.get('Market code', 'NASDAQ')),
-                            str(transaction.get('Currency', 'USD')).lower(),
-                            str(transaction.get('Transaction type', '')).upper(),
-                            float(transaction.get('Quantity', 0)),
-                            float(transaction.get('Price', 0)),
-                            float(transaction.get('Amount', 0)),
-                            float(transaction.get('Transaction fee', 0)),
-                            transaction.get('Trade date')
-                        ))
-                        transaction_count += 1
-                    except Exception as db_error:
-                        print(f"Error inserting transaction: {db_error}")
-                        continue
-                
-                print(f"Successfully inserted {transaction_count} transactions")
-                
-                conn.commit()
-                conn.close()
-                
-            except Exception as parse_error:
-                print(f"Error parsing CSV: {parse_error}")
-                import traceback
-                traceback.print_exc()
-                return jsonify({'error': f'Error parsing CSV: {str(parse_error)}'}), 400
-            
-            # Mark that portfolio is loaded in this session
-            session['portfolio_loaded'] = True
-            
-            return jsonify({
-                'message': 'Transaction data uploaded successfully',
-                'transaction_count': transaction_count,
-                'calculation_method': 'transaction_based'
-            })
-        else:
+        if not (file and file.filename.endswith('.csv')):
             print(f"Invalid file format: {file.filename}")
             return jsonify({'error': 'Invalid file format. Please upload a .csv file'}), 400
+        
+        # Read CSV content
+        print("Reading CSV content...")
+        content = file.read().decode('utf-8')
+        
+        # Use the new workflow service
+        from services.portfolio_workflow import PortfolioWorkflowService
+        workflow_service = PortfolioWorkflowService(app.config['DATABASE'])
+        
+        # Execute complete workflow: CSV -> Tickers -> Prices -> Analysis
+        print("Starting complete portfolio workflow...")
+        workflow_result = workflow_service.process_csv_upload(content)
+        
+        if not workflow_result.get('success', False):
+            print(f"Workflow failed: {workflow_result.get('error', 'Unknown error')}")
+            return jsonify({
+                'error': workflow_result.get('error', 'Upload workflow failed'),
+                'step_failed': workflow_result.get('step_failed', 'unknown')
+            }), 400
+        
+        # Mark that portfolio is loaded in this session
+        session['portfolio_loaded'] = True
+        
+        print("=== PORTFOLIO WORKFLOW COMPLETED SUCCESSFULLY ===")
+        
+        # Return comprehensive workflow results
+        return jsonify({
+            'success': True,
+            'message': 'Portfolio uploaded and processed successfully',
+            'workflow_complete': True,
+            'steps_completed': workflow_result['steps_completed'],
+            'summary': workflow_result['summary'],
+            'price_status': workflow_result['price_status'],
+            'next_steps': workflow_result['next_steps'],
+            'calculation_method': 'transaction_based_with_price_sync',
+            'portfolio_data': {
+                'holdings_count': workflow_result['summary']['unique_tickers'],
+                'prices_fetched': workflow_result['summary']['prices_fetched'],
+                'manual_entry_needed': workflow_result['summary']['manual_entry_needed'],
+                'ready_for_analysis': workflow_result['summary']['ready_for_analysis']
+            }
+        })
     
     except Exception as e:
-        print(f"Error in upload_portfolio: {e}")
+        print(f"Error in upload_portfolio workflow: {e}")
         import traceback
         traceback.print_exc()
-        response = jsonify({'error': f'Upload failed: {str(e)}'})
+        response = jsonify({'error': f'Upload workflow failed: {str(e)}'})
         response.headers['Content-Type'] = 'application/json'
         return response, 500
 
@@ -1081,10 +1038,43 @@ def get_manual_prices():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/statistical-analysis', methods=['GET'])
+@require_auth
+def get_statistical_analysis():
+    """Get comprehensive statistical analysis of portfolio"""
+    try:
+        # Get portfolio data
+        from services.transaction_portfolio import TransactionPortfolioService
+        portfolio_service = TransactionPortfolioService()
+        portfolio_data = portfolio_service.calculate_portfolio_from_transactions(app.config['DATABASE'], fetch_prices=False)
+        
+        if not portfolio_data.get('holdings'):
+            return jsonify({'error': 'No portfolio data found. Please upload transactions first.'}), 400
+        
+        # Perform statistical analysis
+        from services.statistical_analysis import StatisticalAnalysisService
+        analysis_service = StatisticalAnalysisService(app.config['DATABASE'])
+        
+        analysis_result = analysis_service.analyze_portfolio(portfolio_data['holdings'])
+        
+        if 'error' in analysis_result:
+            return jsonify(analysis_result), 400
+        
+        return jsonify({
+            'success': True,
+            'analysis': analysis_result,
+            'portfolio_summary': portfolio_data['summary'],
+            'analysis_timestamp': analysis_result['analysis_timestamp']
+        })
+        
+    except Exception as e:
+        print(f"Statistical analysis error: {e}")
+        return jsonify({'error': f'Statistical analysis failed: {str(e)}'}), 500
+
 @app.route('/api/sync-prices', methods=['POST'])
 @require_auth
 def sync_prices_background():
-    """Background sync prices from APIs to database"""
+    """Background sync prices from APIs to database with proper delays"""
     try:
         # Get tickers from request or use portfolio tickers
         data = request.get_json() or {}
@@ -1102,15 +1092,26 @@ def sync_prices_background():
         if not tickers:
             return jsonify({'error': 'No tickers to sync'}), 400
         
-        print(f"Starting background price sync for {len(tickers)} tickers...")
+        print(f"Starting background price sync for {len(tickers)} tickers with delays...")
         
-        # Use market service to sync prices
-        sync_results = market_service.sync_prices_background(tickers)
+        # Use the workflow service for proper rate-limited syncing
+        from services.portfolio_workflow import PortfolioWorkflowService
+        workflow_service = PortfolioWorkflowService(app.config['DATABASE'])
+        
+        price_results = workflow_service._step4_fetch_prices_with_delays(set(tickers))
         
         return jsonify({
-            'message': 'Price sync completed',
-            'results': sync_results,
-            'sync_timestamp': datetime.now().isoformat()
+            'message': f'Price sync completed for {len(tickers)} tickers',
+            'results': {
+                'total_tickers': len(tickers),
+                'successful': len(price_results['successful']),
+                'failed': len(price_results['failed']),
+                'success_rate': f"{len(price_results['successful'])}/{len(tickers)} ({len(price_results['successful'])/len(tickers)*100:.1f}%)",
+                'successful_tickers': list(price_results['successful'].keys()),
+                'failed_tickers': price_results['failed']
+            },
+            'sync_timestamp': datetime.now().isoformat(),
+            'next_action': 'Set manual prices for failed tickers' if price_results['failed'] else 'All prices updated successfully'
         })
         
     except Exception as e:

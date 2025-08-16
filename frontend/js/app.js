@@ -193,15 +193,29 @@ async function uploadPortfolio(file) {
             // Don't set Content-Type header, let browser set it with boundary for multipart
         });
         
-        console.log('Upload response status:', response?.status);
-        console.log('Upload response headers:', response?.headers);
-        
         if (response && response.ok) {
             const data = await response.json();
-            console.log('Upload response data:', data);
-            console.log('transaction_count value:', data.transaction_count);
-            console.log('transaction_count type:', typeof data.transaction_count);
-            alert(`Transaction data uploaded successfully! Added ${data.transaction_count || 'UNDEFINED'} transactions.`);
+            // Handle new workflow response
+            if (data.workflow_complete && data.steps_completed) {
+                const summary = data.summary;
+                const priceStatus = data.price_status;
+                
+                alert(`✅ Portfolio Workflow Completed!
+                
+📊 Summary:
+• ${summary.transactions_processed} transactions processed
+• ${summary.unique_tickers} unique tickers found
+• ${summary.prices_fetched}/${summary.unique_tickers} prices fetched (${priceStatus.success_rate})
+• ${summary.manual_entry_needed} tickers need manual prices
+
+Next Steps: ${data.next_steps.recommendation}`);
+                
+                // Show statistical analysis button if ready
+                showStatisticalAnalysisButton(summary.prices_fetched >= 3);
+            } else {
+                // Fallback for old format
+                alert(`Transaction data uploaded successfully! Added ${data.transaction_count || 'UNDEFINED'} transactions.`);
+            }
             loadPortfolio();
         } else if (response) {
             // Check if response is HTML instead of JSON
@@ -251,7 +265,7 @@ async function fetchMarketData() {
         const response = await authenticatedFetch(`${API_BASE}/market-data`);
         if (response && response.ok) {
             const data = await response.json();
-            console.log('Market data response:', data);
+            // Market data updated successfully
             alert(`Market data updated! Updated ${data.updated_holdings} holdings with live prices.`);
             // Reload portfolio to show updated prices and returns
             await loadPortfolio();
@@ -282,7 +296,7 @@ async function syncPricesBackground() {
         
         if (response && response.ok) {
             const data = await response.json();
-            console.log('Price sync response:', data);
+            // Price sync completed
             const results = data.results;
             alert(`Price sync completed!\nUpdated: ${results.success_count} tickers\nFailed: ${results.error_count} tickers`);
             // Reload portfolio to show updated prices
@@ -744,6 +758,238 @@ function closeModal() {
     }
 }
 
+// Statistical Analysis Functions
+function showStatisticalAnalysisButton(ready) {
+    let analysisBtn = document.getElementById('statistical-analysis-btn');
+    
+    if (!analysisBtn) {
+        // Create the button
+        analysisBtn = document.createElement('button');
+        analysisBtn.id = 'statistical-analysis-btn';
+        analysisBtn.className = 'btn-statistical';
+        analysisBtn.onclick = () => runStatisticalAnalysis();
+        
+        // Add to controls section
+        const controls = document.querySelector('.controls');
+        if (controls) {
+            controls.appendChild(analysisBtn);
+        }
+    }
+    
+    if (ready) {
+        analysisBtn.textContent = '📈 Statistical Analysis';
+        analysisBtn.disabled = false;
+        analysisBtn.title = 'Run comprehensive portfolio analysis';
+    } else {
+        analysisBtn.textContent = '📈 Statistical Analysis (Need 3+ holdings with prices)';
+        analysisBtn.disabled = true;
+        analysisBtn.title = 'Need at least 3 holdings with valid prices for analysis';
+    }
+}
+
+async function runStatisticalAnalysis() {
+    const btn = document.getElementById('statistical-analysis-btn');
+    if (!btn) return;
+    
+    btn.textContent = 'Analyzing Portfolio...';
+    btn.disabled = true;
+    
+    try {
+        const response = await authenticatedFetch(`${API_BASE}/statistical-analysis`);
+        
+        if (response && response.ok) {
+            const data = await response.json();
+            // Statistical analysis completed
+            displayStatisticalAnalysis(data.analysis);
+        } else {
+            const error = await response.json();
+            alert('Statistical analysis error: ' + error.error);
+        }
+    } catch (error) {
+        console.error('Statistical analysis error:', error);
+        alert('Error running statistical analysis: ' + error.message);
+    } finally {
+        btn.textContent = '📈 Statistical Analysis';
+        btn.disabled = false;
+    }
+}
+
+function displayStatisticalAnalysis(analysis) {
+    // Remove existing analysis
+    const existingAnalysis = document.getElementById('statistical-analysis-results');
+    if (existingAnalysis) {
+        existingAnalysis.remove();
+    }
+    
+    // Create analysis display
+    const analysisDiv = document.createElement('div');
+    analysisDiv.id = 'statistical-analysis-results';
+    analysisDiv.className = 'statistical-analysis';
+    
+    const overview = analysis.portfolio_overview;
+    const returns = analysis.return_distribution;
+    const risk = analysis.risk_analysis;
+    const concentration = analysis.concentration_analysis;
+    const performance = analysis.performance_metrics;
+    const recommendations = analysis.recommendations || [];
+    
+    analysisDiv.innerHTML = `
+        <div class="analysis-container">
+            <h2>📊 Statistical Portfolio Analysis</h2>
+            <p class="analysis-timestamp">Analysis completed: ${new Date(analysis.analysis_timestamp).toLocaleString()}</p>
+            <p class="analysis-coverage">Coverage: ${analysis.analysis_coverage} of portfolio analyzed</p>
+            
+            <div class="analysis-grid">
+                <div class="analysis-card">
+                    <h3>💰 Portfolio Overview</h3>
+                    <div class="metric-grid">
+                        <div class="metric">
+                            <label>Portfolio Return:</label>
+                            <span class="${overview.portfolio_return_percentage >= 0 ? 'positive' : 'negative'}">
+                                ${overview.portfolio_return_percentage.toFixed(2)}%
+                            </span>
+                        </div>
+                        <div class="metric">
+                            <label>Total Value:</label>
+                            <span>$${overview.total_current_value.toLocaleString()}</span>
+                        </div>
+                        <div class="metric">
+                            <label>Total Return:</label>
+                            <span class="${overview.total_return_amount >= 0 ? 'positive' : 'negative'}">
+                                $${overview.total_return_amount.toLocaleString()}
+                            </span>
+                        </div>
+                        <div class="metric">
+                            <label>Positions:</label>
+                            <span>${overview.number_of_positions}</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="analysis-card">
+                    <h3>📈 Return Distribution</h3>
+                    <div class="metric-grid">
+                        <div class="metric">
+                            <label>Mean Return:</label>
+                            <span>${returns.mean_return.toFixed(2)}%</span>
+                        </div>
+                        <div class="metric">
+                            <label>Win Rate:</label>
+                            <span>${returns.win_rate}%</span>
+                        </div>
+                        <div class="metric">
+                            <label>Best Performer:</label>
+                            <span class="positive">${returns.max_return.toFixed(2)}%</span>
+                        </div>
+                        <div class="metric">
+                            <label>Worst Performer:</label>
+                            <span class="negative">${returns.min_return.toFixed(2)}%</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="analysis-card">
+                    <h3>⚠️ Risk Analysis</h3>
+                    <div class="metric-grid">
+                        <div class="metric">
+                            <label>Risk Level:</label>
+                            <span class="risk-${risk.risk_level.toLowerCase()}">${risk.risk_level}</span>
+                        </div>
+                        <div class="metric">
+                            <label>Volatility:</label>
+                            <span>${risk.portfolio_volatility.toFixed(2)}%</span>
+                        </div>
+                        <div class="metric">
+                            <label>Value at Risk (5%):</label>
+                            <span class="negative">${risk.value_at_risk_5pct.toFixed(2)}%</span>
+                        </div>
+                        <div class="metric">
+                            <label>Diversification Score:</label>
+                            <span>${risk.diversification_score.toFixed(1)}/10</span>
+                        </div>
+                    </div>
+                    <p class="risk-interpretation">${risk.volatility_interpretation}</p>
+                </div>
+                
+                <div class="analysis-card">
+                    <h3>🎯 Concentration</h3>
+                    <div class="metric-grid">
+                        <div class="metric">
+                            <label>Concentration Level:</label>
+                            <span>${concentration.concentration_level}</span>
+                        </div>
+                        <div class="metric">
+                            <label>Top Position:</label>
+                            <span>${concentration.top_position_weight.toFixed(1)}%</span>
+                        </div>
+                        <div class="metric">
+                            <label>Top 3 Holdings:</label>
+                            <span>${concentration.top_3_concentration.toFixed(1)}%</span>
+                        </div>
+                        <div class="metric">
+                            <label>Concentration Risk:</label>
+                            <span class="risk-${concentration.concentration_risk.toLowerCase()}">${concentration.concentration_risk}</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="analysis-card">
+                    <h3>🏆 Performance Metrics</h3>
+                    <div class="metric-grid">
+                        <div class="metric">
+                            <label>Sharpe Ratio:</label>
+                            <span>${performance.sharpe_ratio}</span>
+                        </div>
+                        <div class="metric">
+                            <label>Sortino Ratio:</label>
+                            <span>${performance.sortino_ratio}</span>
+                        </div>
+                        <div class="metric">
+                            <label>Performance Ranking:</label>
+                            <span class="ranking-${performance.performance_ranking.toLowerCase()}">${performance.performance_ranking}</span>
+                        </div>
+                    </div>
+                </div>
+                
+                ${recommendations.length > 0 ? `
+                <div class="analysis-card recommendations-card">
+                    <h3>💡 Recommendations</h3>
+                    <div class="recommendations-list">
+                        ${recommendations.map(rec => `
+                            <div class="recommendation priority-${rec.priority.toLowerCase()}">
+                                <div class="rec-header">
+                                    <span class="rec-type">${rec.type}</span>
+                                    <span class="rec-priority">${rec.priority} Priority</span>
+                                </div>
+                                <p class="rec-text">${rec.recommendation}</p>
+                                <p class="rec-action"><strong>Action:</strong> ${rec.action}</p>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+                ` : ''}
+            </div>
+        </div>
+    `;
+    
+    // Add to page
+    const container = document.querySelector('.container');
+    if (container) {
+        container.appendChild(analysisDiv);
+        
+        // Scroll to analysis
+        analysisDiv.scrollIntoView({ behavior: 'smooth' });
+    }
+}
+
+// Initialize statistical analysis button on page load
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize the button as disabled
+    setTimeout(() => {
+        showStatisticalAnalysisButton(false);
+    }, 1000);
+});
+
 // Update currency conversion info display
 function updateCurrencyInfo(currencyInfo) {
     // Remove existing currency info
@@ -807,7 +1053,7 @@ async function generateMLRecommendations() {
         const response = await authenticatedFetch(`${API_BASE}/ml-recommendations`);
         if (!response || !response.ok) return;
         const data = await response.json();
-        console.log('Statistical ML recommendations response:', data);
+        // ML recommendations loaded
         
         displayMLRecommendations(data.recommendations);
         
@@ -867,7 +1113,7 @@ async function generateLiveMLRecommendations(event) {
         const response = await authenticatedFetch(`${API_BASE}/live-ml-recommendations`);
         if (!response || !response.ok) return;
         const data = await response.json();
-        console.log('Live ML recommendations response:', data);
+        // Live ML recommendations loaded
         
         displayMLRecommendations(data.recommendations);
         
