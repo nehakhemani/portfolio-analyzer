@@ -90,10 +90,18 @@ class EnhancedMLRecommendationEngine:
         # Handle both old and new data formats for backward compatibility
         if 'current_value' in holding:
             # New simplified workflow format
-            current_value = holding.get('current_value', 0) or 0
+            current_value = holding.get('current_value')
             cost_basis = holding.get('cost_basis', 0) or 0
-            current_return = holding.get('return_percentage', 0) or 0
+            current_return = holding.get('return_percentage')
             dividends = 0  # Not tracked in new format
+            
+            # Check if prices are available
+            if current_value is None or current_return is None:
+                # No live price data available - use cost basis as placeholder
+                current_value = cost_basis
+                current_return = 0  # No return calculation without price data
+                print(f"NO PRICE DATA for {ticker} - using cost basis estimation")
+            
         else:
             # Legacy format
             current_value = holding.get('end_value', 0) or 0
@@ -101,12 +109,15 @@ class EnhancedMLRecommendationEngine:
             current_return = ((current_value - cost_basis) / cost_basis * 100) if cost_basis > 0 else 0
             dividends = holding.get('dividends', 0) or 0
         
+        # Determine if we have live price data
+        has_live_data = holding.get('current_price') is not None
+        
         features = {
             'ticker': ticker,
             'current_return': current_return,
             'dividend_yield': (dividends / cost_basis * 100) if cost_basis > 0 else 0,
             'position_size': current_value,
-            'has_live_data': holding.get('current_price') is not None
+            'has_live_data': has_live_data
         }
         
         # For Statistical ML Analysis - use only portfolio-based estimates
@@ -1188,51 +1199,63 @@ class EnhancedMLRecommendationEngine:
     def score_to_recommendation(self, ml_score: float, return_pct: float, risk_score: int) -> dict:
         """Convert ML score to recommendation with ticker-specific logic"""
         
-        # Add more granular scoring based on multiple factors
-        combined_score = ml_score + (return_pct * 0.3) - (risk_score * 0.2)
+        # More balanced scoring - reduce the impact of combined score calculation
+        combined_score = ml_score + (return_pct * 0.2) - (risk_score * 0.15)
         
-        # Exceptional opportunities (top tier)
-        if combined_score > 75 or (ml_score > 65 and return_pct > 30):
-            if return_pct > 50:
-                return {'action': 'SELL', 'label': 'Take Major Profits', 'target': 'Sell 40-60% of position'}
-            else:
-                return {'action': 'BUY', 'label': 'Strong Buy', 'target': 'Increase position significantly'}
+        # Debug logging to understand scoring
+        print(f"ML Score: {ml_score:.1f}, Return: {return_pct:.1f}%, Risk: {risk_score}, Combined: {combined_score:.1f}")
         
-        # Strong opportunities
-        elif combined_score > 60 or (ml_score > 55 and risk_score < 40):
-            if return_pct > 35:
-                return {'action': 'HOLD', 'label': 'Hold & Trim', 'target': 'Take some profits, hold core'}
+        # Special case: No price data available (return = 0%, no current price)
+        has_price_data = features.get('has_live_data', True)  # Assume true unless explicitly false
+        if return_pct == 0 and not has_price_data:
+            return {'action': 'HOLD', 'label': 'Awaiting Price Data', 'target': 'Set manual price or fetch live data'}
+        
+        # Strong BUY signals
+        if ml_score > 70 or (ml_score > 60 and return_pct < -10):
+            return {'action': 'BUY', 'label': 'Strong Buy', 'target': 'Increase position significantly'}
+        
+        # Regular BUY signals  
+        elif ml_score > 60 or (ml_score > 50 and return_pct < -5):
+            return {'action': 'BUY', 'label': 'Buy Signal', 'target': 'Consider adding to position'}
+        
+        # Strong SELL signals (only for extreme profits or high risk)
+        elif return_pct > 80 or (return_pct > 50 and risk_score > 70):
+            return {'action': 'SELL', 'label': 'Take Major Profits', 'target': 'Sell 40-60% of position'}
+        
+        # Moderate SELL signals
+        elif return_pct > 60 or (return_pct > 40 and risk_score > 60):
+            return {'action': 'SELL', 'label': 'Take Profits', 'target': 'Sell 30-40% of position'}
+        
+        # HOLD with profit taking
+        elif return_pct > 30:
+            return {'action': 'HOLD', 'label': 'Hold & Trim', 'target': 'Take some profits, hold core'}
+        
+        # Strong HOLD signals
+        elif ml_score > 45 or (ml_score > 40 and risk_score < 50):
+            if return_pct > 15:
+                return {'action': 'HOLD', 'label': 'Monitor Winner', 'target': 'Set trailing stops'}
             elif return_pct < -15:
                 return {'action': 'BUY', 'label': 'Buy the Dip', 'target': 'Dollar-cost average entry'}
             else:
-                return {'action': 'BUY', 'label': 'Buy Signal', 'target': 'Consider adding to position'}
+                return {'action': 'HOLD', 'label': 'Strong Hold', 'target': 'Monitor closely'}
         
-        # Moderate opportunities  
-        elif combined_score > 45 or (ml_score > 45 and risk_score < 60):
-            if return_pct > 25:
-                return {'action': 'HOLD', 'label': 'Hold with Caution', 'target': 'Set trailing stops'}
-            elif return_pct < -10:
-                return {'action': 'BUY', 'label': 'Potential Entry', 'target': 'Small position sizing'}
-            else:
-                return {'action': 'HOLD', 'label': 'Neutral Hold', 'target': 'Monitor closely'}
-        
-        # Weak opportunities
-        elif combined_score > 30 or (ml_score > 35):
-            if risk_score > 70:
-                return {'action': 'SELL', 'label': 'Risk Management', 'target': 'Reduce position by 30-50%'}
-            elif return_pct > 15:
+        # Neutral HOLD (most common case for 0% returns)
+        elif ml_score > 30 or (return_pct == 0) or return_pct > -20:
+            if return_pct > 10:
                 return {'action': 'HOLD', 'label': 'Hold for Now', 'target': 'Consider exit strategy'}
             else:
-                return {'action': 'HOLD', 'label': 'Weak Hold', 'target': 'Prepare exit plan'}
+                return {'action': 'HOLD', 'label': 'Neutral Hold', 'target': 'Monitor quarterly'}
         
-        # Poor performance (bottom tier)
+        # Weak performance - consider reducing but not necessarily selling everything
+        elif return_pct < -30 or (risk_score > 80):
+            return {'action': 'SELL', 'label': 'Risk Management', 'target': 'Reduce position by 30-50%'}
+        
+        # Default to HOLD instead of SELL
         else:
-            if return_pct > 20:  # Still profitable despite poor score
-                return {'action': 'SELL', 'label': 'Take Profits', 'target': 'Sell 50-70% of position'}
-            elif return_pct > 0:
-                return {'action': 'SELL', 'label': 'Exit Gradually', 'target': 'Reduce position size'}
+            if return_pct < -40:
+                return {'action': 'SELL', 'label': 'Cut Losses', 'target': 'Exit position gradually'}
             else:
-                return {'action': 'SELL', 'label': 'Strong Sell', 'target': 'Exit position completely'}
+                return {'action': 'HOLD', 'label': 'Weak Hold', 'target': 'Review investment thesis'}
     
     def generate_rationale(self, features: dict, risk_score: int, 
                           market_regime: str, ml_score: float) -> str:

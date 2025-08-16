@@ -51,10 +51,18 @@ class MLRecommendationEngine:
             # Handle both old and new data formats for backward compatibility
             if 'current_value' in holding:
                 # New simplified workflow format
-                current_value = holding.get('current_value', 0) or 0
+                current_value = holding.get('current_value')
                 cost_basis = holding.get('cost_basis', 0) or 0
-                current_return = holding.get('return_percentage', 0) or 0
+                current_return = holding.get('return_percentage')
                 dividends = 0  # Not tracked in new format
+                
+                # Check if prices are available
+                if current_value is None or current_return is None:
+                    # No live price data available - use cost basis as placeholder
+                    current_value = cost_basis
+                    current_return = 0  # No return calculation without price data
+                    print(f"NO PRICE DATA for {ticker} - using cost basis estimation")
+                
             else:
                 # Legacy format
                 current_value = holding.get('end_value', 0) or 0
@@ -89,10 +97,17 @@ class MLRecommendationEngine:
             # Handle both old and new data formats for backward compatibility
             if 'current_value' in holding:
                 # New simplified workflow format
-                current_value = holding.get('current_value', 0) or 0
+                current_value = holding.get('current_value')
                 cost_basis = holding.get('cost_basis', 0) or 0
-                current_return = holding.get('return_percentage', 0) or 0
+                current_return = holding.get('return_percentage')
                 dividends = 0  # Not tracked in new format
+                
+                # Check if prices are available
+                if current_value is None or current_return is None:
+                    # No live price data available - use cost basis as placeholder
+                    current_value = cost_basis
+                    current_return = 0  # No return calculation without price data
+                
             else:
                 # Legacy format
                 current_value = holding.get('end_value', 0) or 0
