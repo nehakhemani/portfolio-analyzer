@@ -267,6 +267,36 @@ async function fetchLivePrices() {
     }
 }
 
+async function refreshPortfolioWithPrices() {
+    // Refresh portfolio by fetching live prices (including manual overrides) without showing alerts
+    try {
+        const response = await authenticatedFetch(`${API_BASE}/fetch-live-prices`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (response && response.ok) {
+            const data = await response.json();
+            console.log('Portfolio refreshed with updated prices');
+            
+            // Update portfolio data and UI
+            currentPortfolio = data;
+            updateWorkflowSteps(data);
+            updateUI();
+        } else {
+            console.error('Failed to refresh portfolio prices');
+            // Fallback to basic portfolio load
+            await loadPortfolio();
+        }
+    } catch (error) {
+        console.error('Error refreshing portfolio:', error);
+        // Fallback to basic portfolio load
+        await loadPortfolio();
+    }
+}
+
 async function runCompleteAnalysis() {
     console.log('STEP 4: Running complete analysis...');
     const btn = document.getElementById('analyzeBtn');
@@ -902,10 +932,21 @@ async function setManualPrice(ticker) {
             const result = await response.json();
             alert(`Manual price set: ${ticker} = $${price.toFixed(2)}`);
             closeModal();
-            await loadPortfolio(); // Refresh to show manual price
+            // Reload portfolio with updated prices and recalculated returns
+            await refreshPortfolioWithPrices();
+        } else if (response) {
+            // Handle error response
+            try {
+                const error = await response.json();
+                alert('Error setting manual price: ' + (error.error || 'Unknown error'));
+            } catch (parseError) {
+                // If JSON parsing fails, show the status
+                alert(`Error setting manual price: HTTP ${response.status} - ${response.statusText}`);
+            }
         } else {
-            const error = await response.json();
-            alert('Error setting manual price: ' + error.error);
+            // Response is null - likely authentication issue
+            alert('Authentication error: Please refresh the page and login again');
+            window.location.href = '/login.html';
         }
     } catch (error) {
         alert('Error setting manual price: ' + error.message);
@@ -921,10 +962,17 @@ async function removeManualPrice(ticker) {
         if (response && response.ok) {
             alert(`Manual price removed for ${ticker}`);
             closeModal();
-            await loadPortfolio(); // Refresh to show live price
+            await refreshPortfolioWithPrices(); // Refresh to show updated price
+        } else if (response) {
+            try {
+                const error = await response.json();
+                alert('Error removing manual price: ' + (error.error || 'Unknown error'));
+            } catch (parseError) {
+                alert(`Error removing manual price: HTTP ${response.status} - ${response.statusText}`);
+            }
         } else {
-            const error = await response.json();
-            alert('Error removing manual price: ' + error.error);
+            alert('Authentication error: Please refresh the page and login again');
+            window.location.href = '/login.html';
         }
     } catch (error) {
         alert('Error removing manual price: ' + error.message);
