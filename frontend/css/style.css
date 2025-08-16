@@ -1095,3 +1095,54 @@ select:focus-visible {
 .rec-action strong {
     color: var(--primary-color);
 }
+
+/* Workflow steps styling */
+.workflow-step {
+    background: var(--bg-card);
+    border: 2px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+    padding: 1.5rem;
+    margin: 1rem 0;
+    transition: all 0.3s ease;
+}
+
+.workflow-step.active {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 20px rgba(102, 126, 234, 0.3);
+}
+
+.workflow-step.completed {
+    border-color: var(--success-color);
+    background: linear-gradient(135deg, rgba(76, 175, 80, 0.1), rgba(139, 195, 74, 0.1));
+}
+
+.workflow-step h3 {
+    color: var(--primary-color);
+    margin-bottom: 0.5rem;
+    font-size: 1.2em;
+}
+
+.workflow-step p {
+    color: var(--text-secondary);
+    margin-bottom: 1rem;
+    font-size: 0.9em;
+}
+
+.workflow-step button {
+    font-size: 1.1em;
+    padding: 12px 24px;
+    min-width: 200px;
+}
+
+.additional-actions {
+    background: var(--bg-secondary);
+    border-radius: var(--border-radius);
+    padding: 1rem;
+    margin-top: 2rem;
+}
+
+.additional-actions button {
+    margin: 0.5rem;
+    padding: 8px 16px;
+    font-size: 0.9em;
+}

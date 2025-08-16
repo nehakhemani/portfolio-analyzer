@@ -46,30 +46,44 @@
                     💡 Upload your transaction history (BUY/SELL records) for accurate portfolio calculation
                 </div>
             </div>
-            <button onclick="toggleAddHoldingForm()" id="addHoldingBtn">
-                Add New Transaction
-            </button>
-            <button onclick="fetchMarketData()">
-                <span id="marketDataBtn">Fetch Market Data</span>
-            </button>
-            <button id="syncPricesBtn" onclick="syncPricesBackground()" style="background: linear-gradient(45deg, #28a745, #20c997);">
-                Sync Prices
-            </button>
-            <button onclick="generateMLRecommendations()" id="mlRecommendationsBtn" class="btn-statistical">
-                📊 Statistical ML Analysis
-            </button>
-            <button onclick="generateLiveMLRecommendations()" id="liveMLRecommendationsBtn" class="btn-live">
-                🔴 Live Data + ML Analysis
-            </button>
-            <button onclick="exportData()">
-                Export Analysis
-            </button>
-            <button onclick="clearPortfolio()" style="background: linear-gradient(45deg, #ff6b6b, #ee5a52);">
-                Clear Portfolio
-            </button>
-            <button onclick="showCacheStats()" style="background: linear-gradient(45deg, #17a2b8, #138496);">
-                Cache Stats
-            </button>
+            <!-- SIMPLIFIED WORKFLOW BUTTONS -->
+            <div class="workflow-step" id="step1">
+                <h3>Step 1: Upload Transactions</h3>
+                <p>Upload your transaction CSV to see your positions and cost basis</p>
+            </div>
+            
+            <div class="workflow-step" id="step2" style="display: none;">
+                <h3>Step 2: Fetch Live Prices</h3>
+                <button id="fetchPricesBtn" onclick="fetchLivePrices()" style="background: linear-gradient(45deg, #28a745, #20c997);">
+                    🔍 Fetch Live Market Prices
+                </button>
+                <p>Get current market prices to calculate returns</p>
+            </div>
+            
+            <div class="workflow-step" id="step3" style="display: none;">
+                <h3>Step 3: Manual Price Entry (if needed)</h3>
+                <p>For holdings where price fetching failed, use the 💰 button to set manual prices</p>
+            </div>
+            
+            <div class="workflow-step" id="step4" style="display: none;">
+                <h3>Step 4: Portfolio Analysis</h3>
+                <button id="analyzeBtn" onclick="runCompleteAnalysis()" style="background: linear-gradient(45deg, #667eea, #764ba2);">
+                    📊 Run ML + Statistical Analysis
+                </button>
+                <p>Comprehensive portfolio analysis with recommendations</p>
+            </div>
+            
+            <div class="additional-actions" style="margin-top: 20px; display: none;" id="additionalActions">
+                <button onclick="toggleAddHoldingForm()" id="addHoldingBtn">
+                    Add New Transaction
+                </button>
+                <button onclick="exportData()">
+                    Export Analysis
+                </button>
+                <button onclick="clearPortfolio()" style="background: linear-gradient(45deg, #ff6b6b, #ee5a52);">
+                    Clear Portfolio
+                </button>
+            </div>
         </section>
         
         <!-- Add Holding Form -->

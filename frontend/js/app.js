@@ -151,16 +151,16 @@ document.addEventListener('DOMContentLoaded', async function() {
 });
 
 async function loadPortfolio() {
-    console.log('Loading portfolio...');
+    console.log('STEP 1: Loading portfolio positions...');
     try {
         const response = await authenticatedFetch(`${API_BASE}/portfolio`);
         if (response && response.ok) {
             const data = await response.json();
-            console.log('Portfolio loaded:', data);
-            console.log('Portfolio summary:', data.summary);
-            console.log('Portfolio currency_info:', data.currency_info);
-            console.log('Portfolio holdings count:', data.holdings ? data.holdings.length : 'NO HOLDINGS');
+            console.log('Portfolio positions loaded:', data);
             currentPortfolio = data;
+            
+            // Update workflow based on portfolio state
+            updateWorkflowSteps(data);
             updateUI();
         }
     } catch (error) {
@@ -169,14 +169,124 @@ async function loadPortfolio() {
         currentPortfolio = {
             holdings: [],
             summary: {
-                total_value: 0,
-                total_return: 0,
-                return_percentage: 0,
-                total_dividends: 0,
+                total_cost_basis: 0,
+                total_current_value: null,
+                total_return: null,
+                return_percentage: null,
                 holdings_count: 0
             }
         };
         updateUI();
+    }
+}
+
+function updateWorkflowSteps(portfolioData) {
+    const step1 = document.getElementById('step1');
+    const step2 = document.getElementById('step2');
+    const step3 = document.getElementById('step3');
+    const step4 = document.getElementById('step4');
+    const additionalActions = document.getElementById('additionalActions');
+    
+    if (!portfolioData.holdings || portfolioData.holdings.length === 0) {
+        // No portfolio loaded - show step 1
+        step1.classList.add('active');
+        step2.style.display = 'none';
+        step3.style.display = 'none';
+        step4.style.display = 'none';
+        additionalActions.style.display = 'none';
+    } else if (portfolioData.workflow_step === 'positions_loaded') {
+        // Step 1 complete - show step 2
+        step1.classList.add('completed');
+        step1.classList.remove('active');
+        step2.style.display = 'block';
+        step2.classList.add('active');
+        step3.style.display = 'none';
+        step4.style.display = 'none';
+        additionalActions.style.display = 'block';
+    } else if (portfolioData.workflow_step === 'prices_fetched') {
+        // Step 2 complete - show step 3 and 4
+        step1.classList.add('completed');
+        step2.classList.add('completed');
+        step2.classList.remove('active');
+        step3.style.display = 'block';
+        step4.style.display = 'block';
+        step4.classList.add('active');
+        additionalActions.style.display = 'block';
+        
+        // Show step 3 only if there are failed prices
+        if (portfolioData.summary?.failed_prices > 0) {
+            step3.classList.add('active');
+        } else {
+            step3.classList.add('completed');
+        }
+    }
+}
+
+async function fetchLivePrices() {
+    console.log('STEP 2: Fetching live prices...');
+    const btn = document.getElementById('fetchPricesBtn');
+    const originalText = btn.textContent;
+    
+    btn.textContent = 'Fetching prices... (this may take a moment)';
+    btn.disabled = true;
+    
+    try {
+        const response = await authenticatedFetch(`${API_BASE}/fetch-live-prices`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (response && response.ok) {
+            const data = await response.json();
+            console.log('Live prices fetched:', data);
+            
+            // Update portfolio data
+            currentPortfolio = data;
+            updateWorkflowSteps(data);
+            updateUI();
+            
+            // Show results
+            const results = data.price_fetch_results;
+            if (results) {
+                alert(`Live prices fetched!\n\nSuccess: ${results.successful} tickers\nFailed: ${results.failed} tickers\nSuccess rate: ${results.success_rate}\n\nNext: ${data.next_action}`);
+            } else {
+                alert('Live prices fetched successfully!');
+            }
+        } else {
+            const errorText = await response.text();
+            alert(`Failed to fetch live prices: ${errorText}`);
+        }
+    } catch (error) {
+        console.error('Error fetching live prices:', error);
+        alert('Error fetching live prices: ' + error.message);
+    } finally {
+        btn.textContent = originalText;
+        btn.disabled = false;
+    }
+}
+
+async function runCompleteAnalysis() {
+    console.log('STEP 4: Running complete analysis...');
+    const btn = document.getElementById('analyzeBtn');
+    const originalText = btn.textContent;
+    
+    btn.textContent = 'Running analysis...';
+    btn.disabled = true;
+    
+    try {
+        // Run both ML and statistical analysis
+        await generateMLRecommendations();
+        // Additional analysis can be added here
+        
+        alert('Complete portfolio analysis finished! Check the recommendations and charts below.');
+    } catch (error) {
+        console.error('Error running analysis:', error);
+        alert('Error running analysis: ' + error.message);
+    } finally {
+        btn.textContent = originalText;
+        btn.disabled = false;
     }
 }
 
@@ -199,37 +309,23 @@ async function uploadPortfolio(file) {
             if (data.workflow_complete && data.steps_completed) {
                 const summary = data.summary;
                 
-                if (data.fast_upload) {
-                    // Fast upload completed
-                    alert(`✅ Portfolio Uploaded Successfully!
-                    
-📊 Summary:
-• ${summary.transactions_processed} transactions processed
-• ${summary.unique_tickers} unique tickers found
-• Ready for price fetching
-
-🚀 Next Steps: ${data.next_steps.immediate}`);
-                } else {
-                    // Full workflow with prices completed
-                    const priceStatus = data.price_status;
-                    alert(`✅ Portfolio Workflow Completed!
-                    
-📊 Summary:
-• ${summary.transactions_processed} transactions processed
-• ${summary.unique_tickers} unique tickers found
-• ${summary.prices_fetched}/${summary.unique_tickers} prices fetched (${priceStatus.success_rate})
-• ${summary.manual_entry_needed} tickers need manual prices
-
-Next Steps: ${data.next_steps.recommendation}`);
-                }
+                // Simplified upload completed
+                alert(`✅ Step 1 Complete: Transactions Uploaded!
                 
-                // Show statistical analysis button if ready
-                showStatisticalAnalysisButton(summary.prices_fetched >= 3);
+📊 Summary:
+• ${summary.transactions_processed} transactions processed
+• ${summary.unique_tickers} unique tickers found
+• Portfolio positions calculated
+
+🚀 Next: Click "Fetch Live Market Prices" to continue`);
+                
+                // Reload portfolio to show positions and trigger workflow steps
+                await loadPortfolio();
             } else {
                 // Fallback for old format
-                alert(`Transaction data uploaded successfully! Added ${data.transaction_count || 'UNDEFINED'} transactions.`);
+                alert('Portfolio uploaded successfully!');
+                await loadPortfolio();
             }
-            loadPortfolio();
         } else if (response) {
             // Check if response is HTML instead of JSON
             const contentType = response.headers.get('content-type');

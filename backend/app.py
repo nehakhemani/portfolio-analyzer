@@ -282,14 +282,13 @@ def send_js(path):
 @app.route('/api/portfolio', methods=['GET'])
 @require_auth
 def get_portfolio():
-    """Get current portfolio data using transaction-based calculation"""
+    """STEP 1: Get portfolio positions without prices - cost basis only"""
     
-    # Use new transaction-based portfolio service
     from services.transaction_portfolio import TransactionPortfolioService
     
     portfolio_service = TransactionPortfolioService()
-    # Don't fetch prices automatically - use database-first approach for speed
-    portfolio_data = portfolio_service.calculate_portfolio_from_transactions(app.config['DATABASE'], fetch_prices=False)
+    # SIMPLIFIED: Load positions only, no price fetching
+    portfolio_data = portfolio_service.load_portfolio_positions_only(app.config['DATABASE'])
     
     if not portfolio_data['holdings']:
         return jsonify({
@@ -338,6 +337,22 @@ def get_portfolio():
         }
     })
 
+@app.route('/api/fetch-live-prices', methods=['POST'])
+@require_auth
+def fetch_live_prices():
+    """STEP 2: Fetch live prices for portfolio positions"""
+    
+    from services.transaction_portfolio import TransactionPortfolioService
+    
+    portfolio_service = TransactionPortfolioService()
+    # Add live prices to existing positions
+    portfolio_data = portfolio_service.add_live_prices_to_portfolio(app.config['DATABASE'])
+    
+    if 'error' in portfolio_data:
+        return jsonify(portfolio_data), 400
+    
+    return jsonify(portfolio_data), 200
+
 @app.route('/api/upload-test', methods=['GET'])
 def upload_test():
     """Test endpoint to verify upload route is working"""
@@ -375,8 +390,8 @@ def upload_portfolio():
         from services.portfolio_workflow import PortfolioWorkflowService
         workflow_service = PortfolioWorkflowService(app.config['DATABASE'])
         
-        # Execute fast workflow: CSV -> Tickers -> Storage (skip price fetching to avoid timeout)
-        print("Starting fast portfolio workflow...")
+        # SIMPLIFIED: Just store transactions and return positions
+        print("Starting simplified upload workflow...")
         workflow_result = workflow_service.process_csv_upload(content, fetch_prices=False)
         
         if not workflow_result.get('success', False):

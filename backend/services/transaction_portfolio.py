@@ -11,8 +11,202 @@ from services.stable_market_data import StableMarketDataService as MarketDataSer
 
 class TransactionPortfolioService:
     def __init__(self):
-        self.market_service = MarketDataService()
+        from services.stable_market_data import StableMarketDataService
+        self.market_service = StableMarketDataService()
     
+    def load_portfolio_positions_only(self, db_path):
+        """STEP 1: Load portfolio positions without any price fetching - cost basis only"""
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='transactions'")
+            transactions_table_exists = cursor.fetchone() is not None
+            
+            if not transactions_table_exists:
+                conn.close()
+                return {'holdings': [], 'summary': self._empty_summary(), 'error': 'No transactions table found. Please upload a transaction CSV file.'}
+            
+            # Read all transactions
+            transactions_df = pd.read_sql_query("""
+                SELECT ticker, exchange, transaction_type, quantity, price, fees, trade_date, currency
+                FROM transactions 
+                ORDER BY trade_date ASC
+            """, conn)
+            
+            conn.close()
+            
+            if transactions_df.empty:
+                return {'holdings': [], 'summary': self._empty_summary(), 'error': 'No transactions found. Please upload a transaction CSV file.'}
+            
+            # Calculate current positions from transactions
+            current_positions = self._calculate_positions_from_transactions(transactions_df)
+            
+            # Filter out zero positions
+            active_positions = {ticker: pos for ticker, pos in current_positions.items() 
+                              if pos['quantity'] > 1e-8}
+            
+            if not active_positions:
+                return {'holdings': [], 'summary': self._empty_summary()}
+            
+            # Create holdings with ONLY cost basis info (no prices, no returns)
+            holdings = []
+            total_cost_basis = 0
+            
+            for ticker, position in active_positions.items():
+                cost_basis = position['total_cost']
+                
+                holding = {
+                    'ticker': ticker,
+                    'quantity': position['quantity'],
+                    'avg_cost': position['avg_cost'],
+                    'cost_basis': cost_basis,
+                    'currency': position['currency'],
+                    'exchange': position.get('exchange', 'UNKNOWN'),
+                    # NO price or return data - will be added in step 2
+                    'current_price': None,
+                    'current_value': None,
+                    'total_return': None,
+                    'return_percentage': None,
+                    'needs_price': True,  # Flag to show this needs price fetching
+                    'step': 'positions_loaded'  # Workflow step indicator
+                }
+                
+                holdings.append(holding)
+                total_cost_basis += cost_basis
+            
+            # Sort by cost basis (investment amount) descending
+            holdings.sort(key=lambda x: x['cost_basis'], reverse=True)
+            
+            summary = {
+                'total_cost_basis': round(total_cost_basis, 2),
+                'total_current_value': None,  # Will be calculated after price fetching
+                'total_return': None,         # Will be calculated after price fetching
+                'return_percentage': None,    # Will be calculated after price fetching
+                'holdings_count': len(holdings),
+                'last_updated': datetime.now().isoformat(),
+                'workflow_step': 'positions_loaded'  # Workflow indicator
+            }
+            
+            return {
+                'holdings': holdings,
+                'summary': summary,
+                'workflow_step': 'positions_loaded',
+                'next_action': 'Fetch live prices to calculate returns'
+            }
+            
+        except Exception as e:
+            print(f"Error loading portfolio positions: {e}")
+            return {'holdings': [], 'summary': self._empty_summary(), 'error': f'Failed to load positions: {str(e)}'}
+
+    def add_live_prices_to_portfolio(self, db_path):
+        """STEP 2: Fetch live prices and add to existing portfolio positions"""
+        try:
+            # First get the positions (without prices)
+            positions_data = self.load_portfolio_positions_only(db_path)
+            
+            if 'error' in positions_data or not positions_data.get('holdings'):
+                return positions_data
+            
+            holdings = positions_data['holdings']
+            tickers = [h['ticker'] for h in holdings]
+            
+            print(f"STEP 2: Fetching live prices for {len(tickers)} tickers...")
+            
+            # Get ticker-exchange mapping
+            ticker_exchange_map = {h['ticker']: h['exchange'] for h in holdings}
+            
+            # Fetch live prices using database-first approach
+            market_data = self.market_service.fetch_batch_quotes_with_exchange(ticker_exchange_map)
+            
+            # Update holdings with price data and calculate returns
+            total_cost_basis = 0
+            total_current_value = 0
+            
+            for holding in holdings:
+                ticker = holding['ticker']
+                cost_basis = holding['cost_basis']
+                quantity = holding['quantity']
+                
+                total_cost_basis += cost_basis
+                
+                # Check if we got price data
+                if ticker in market_data:
+                    ticker_data = market_data[ticker]
+                    
+                    if not ticker_data.get('has_error', False) and ticker_data.get('price', 0) > 0:
+                        # Success - we have a real price
+                        current_price = float(ticker_data['price'])
+                        current_value = quantity * current_price
+                        total_return = current_value - cost_basis
+                        return_pct = (total_return / cost_basis * 100) if cost_basis > 0 else 0
+                        
+                        # Update holding with price data
+                        holding.update({
+                            'current_price': current_price,
+                            'current_value': current_value,
+                            'total_return': total_return,
+                            'return_percentage': return_pct,
+                            'needs_price': False,
+                            'step': 'prices_fetched',
+                            'price_source': ticker_data.get('source', 'unknown')
+                        })
+                        
+                        total_current_value += current_value
+                        print(f"SUCCESS {ticker}: ${current_price:.2f} (Return: {return_pct:+.1f}%)")
+                        
+                    else:
+                        # Price fetch failed - leave as None
+                        holding.update({
+                            'step': 'price_fetch_failed',
+                            'price_error': ticker_data.get('error', 'Price fetch failed')
+                        })
+                        print(f"FAILED {ticker}: {ticker_data.get('error', 'Price fetch failed')}")
+                else:
+                    # No data returned
+                    holding.update({
+                        'step': 'price_fetch_failed',
+                        'price_error': 'No market data available'
+                    })
+                    print(f"FAILED {ticker}: No market data available")
+            
+            # Calculate portfolio summary
+            portfolio_return = total_current_value - total_cost_basis
+            portfolio_return_pct = (portfolio_return / total_cost_basis * 100) if total_cost_basis > 0 else 0
+            
+            # Count successful vs failed price fetches
+            successful_prices = len([h for h in holdings if h.get('current_price') is not None])
+            failed_prices = len(holdings) - successful_prices
+            
+            summary = {
+                'total_cost_basis': round(total_cost_basis, 2),
+                'total_current_value': round(total_current_value, 2),
+                'total_return': round(portfolio_return, 2),
+                'return_percentage': round(portfolio_return_pct, 2),
+                'holdings_count': len(holdings),
+                'successful_prices': successful_prices,
+                'failed_prices': failed_prices,
+                'last_updated': datetime.now().isoformat(),
+                'workflow_step': 'prices_fetched'
+            }
+            
+            next_action = "Set manual prices for failed tickers" if failed_prices > 0 else "Ready for analysis"
+            
+            return {
+                'holdings': holdings,
+                'summary': summary,
+                'workflow_step': 'prices_fetched',
+                'price_fetch_results': {
+                    'successful': successful_prices,
+                    'failed': failed_prices,
+                    'success_rate': f"{successful_prices}/{len(holdings)} ({successful_prices/len(holdings)*100:.1f}%)"
+                },
+                'next_action': next_action
+            }
+            
+        except Exception as e:
+            print(f"Error adding live prices: {e}")
+            return {'error': f'Failed to fetch live prices: {str(e)}'}
+
     def calculate_portfolio_from_transactions(self, db_path, fetch_prices=False):
         """Calculate the actual portfolio based on transaction history"""
         
