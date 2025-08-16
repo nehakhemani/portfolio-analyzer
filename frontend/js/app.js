@@ -301,7 +301,16 @@ async function fetchMarketData() {
 
 async function syncPricesBackground() {
     console.log('Starting background price sync...');
+    alert('🔧 DEBUG: syncPricesBackground function called successfully!');
+    
     const btn = document.getElementById('syncPricesBtn');
+    
+    if (!btn) {
+        alert('Sync Prices button not found! Please refresh the page.');
+        return;
+    }
+    
+    console.log('Sync button found, starting sync...');
     btn.textContent = 'Syncing Prices... (This may take several minutes)';
     btn.disabled = true;
     
@@ -313,6 +322,7 @@ async function syncPricesBackground() {
     btn.parentNode.insertBefore(progressMsg, btn.nextSibling);
     
     try {
+        console.log('Making sync-prices request...');
         const response = await authenticatedFetch(`${API_BASE}/sync-prices`, {
             method: 'POST',
             headers: {
@@ -321,13 +331,28 @@ async function syncPricesBackground() {
             body: JSON.stringify({}) // Empty body - will use portfolio tickers
         });
         
+        console.log('Sync-prices response received:', response?.status);
+        
         if (response && response.ok) {
             const data = await response.json();
+            console.log('Sync-prices data:', data);
+            
             // Price sync completed
             const results = data.results;
-            alert(`Price sync completed!\nUpdated: ${results.success_count} tickers\nFailed: ${results.error_count} tickers`);
+            if (results) {
+                alert(`Price sync completed!\n\nSuccess: ${results.successful}/${results.total_tickers} tickers\nSuccess rate: ${results.success_rate}\n\nNext action: ${data.next_action}`);
+            } else {
+                alert('Price sync completed successfully!');
+            }
+            
             // Reload portfolio to show updated prices
             await loadPortfolio();
+        } else if (response) {
+            const errorText = await response.text();
+            console.error('Sync-prices error response:', errorText);
+            alert(`Sync-prices failed (${response.status}): ${errorText.substring(0, 200)}`);
+        } else {
+            alert('No response received from sync-prices endpoint');
         }
     } catch (error) {
         console.error('Price sync error:', error);
