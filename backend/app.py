@@ -386,46 +386,53 @@ def upload_portfolio():
         print("Reading CSV content...")
         content = file.read().decode('utf-8')
         
-        # Use the new workflow service
+        # SIMPLIFIED APPROACH: Just store transactions using workflow, then get positions
         from services.portfolio_workflow import PortfolioWorkflowService
         workflow_service = PortfolioWorkflowService(app.config['DATABASE'])
         
-        # SIMPLIFIED: Just store transactions and return positions
-        print("Starting simplified upload workflow...")
+        print("Starting simplified upload: CSV -> Transactions -> Positions...")
+        
+        # Step 1: Store transactions (no price fetching)
         workflow_result = workflow_service.process_csv_upload(content, fetch_prices=False)
         
         if not workflow_result.get('success', False):
-            print(f"Workflow failed: {workflow_result.get('error', 'Unknown error')}")
+            print(f"Transaction storage failed: {workflow_result.get('error', 'Unknown error')}")
             return jsonify({
-                'error': workflow_result.get('error', 'Upload workflow failed'),
+                'error': workflow_result.get('error', 'Upload failed'),
                 'step_failed': workflow_result.get('step_failed', 'unknown')
+            }), 400
+        
+        # Step 2: Get portfolio positions (no prices, just cost basis)
+        from services.transaction_portfolio import TransactionPortfolioService
+        portfolio_service = TransactionPortfolioService()
+        portfolio_data = portfolio_service.load_portfolio_positions_only(app.config['DATABASE'])
+        
+        if 'error' in portfolio_data:
+            print(f"Position calculation failed: {portfolio_data['error']}")
+            return jsonify({
+                'error': portfolio_data['error'],
+                'step_failed': 'position_calculation'
             }), 400
         
         # Mark that portfolio is loaded in this session
         session['portfolio_loaded'] = True
         
-        print("=== PORTFOLIO WORKFLOW COMPLETED SUCCESSFULLY ===")
+        print(f"=== UPLOAD SUCCESS: {len(portfolio_data['holdings'])} positions loaded ===")
         
-        # Return comprehensive workflow results
+        # Return simplified response that frontend expects
         return jsonify({
             'success': True,
-            'message': 'Portfolio uploaded successfully! Use "Sync Prices" button to fetch market data.',
+            'message': 'Step 1 Complete: Transactions uploaded and positions calculated!',
             'workflow_complete': True,
-            'fast_upload': True,
-            'steps_completed': workflow_result['steps_completed'],
-            'summary': workflow_result['summary'],
-            'price_status': workflow_result['price_status'],
-            'next_steps': {
-                'immediate': 'Portfolio is ready! Click "Sync Prices" to fetch current market data.',
-                'recommendation': 'Use the Sync Prices button for rate-limited price fetching'
+            'steps_completed': 1,
+            'summary': {
+                'transactions_processed': workflow_result['summary']['transactions_processed'],
+                'unique_tickers': len(portfolio_data['holdings']),
+                'positions_loaded': len(portfolio_data['holdings']),
+                'total_cost_basis': portfolio_data['summary']['total_cost_basis']
             },
-            'calculation_method': 'transaction_based_fast_upload',
-            'portfolio_data': {
-                'holdings_count': workflow_result['summary']['unique_tickers'],
-                'prices_fetched': workflow_result['summary']['prices_fetched'],
-                'manual_entry_needed': workflow_result['summary']['manual_entry_needed'],
-                'ready_for_analysis': workflow_result['summary']['ready_for_analysis']
-            }
+            'portfolio_data': portfolio_data,  # Include the actual portfolio data
+            'next_action': 'Click "Fetch Live Market Prices" to continue'
         })
     
     except Exception as e:

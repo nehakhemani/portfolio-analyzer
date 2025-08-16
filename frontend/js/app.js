@@ -305,22 +305,29 @@ async function uploadPortfolio(file) {
         
         if (response && response.ok) {
             const data = await response.json();
-            // Handle new workflow response
+            // Handle new simplified workflow response
             if (data.workflow_complete && data.steps_completed) {
                 const summary = data.summary;
                 
-                // Simplified upload completed
+                // Show success message
                 alert(`✅ Step 1 Complete: Transactions Uploaded!
                 
 📊 Summary:
 • ${summary.transactions_processed} transactions processed
 • ${summary.unique_tickers} unique tickers found
-• Portfolio positions calculated
+• Cost basis: $${summary.total_cost_basis?.toLocaleString() || 'N/A'}
 
 🚀 Next: Click "Fetch Live Market Prices" to continue`);
                 
-                // Reload portfolio to show positions and trigger workflow steps
-                await loadPortfolio();
+                // Update current portfolio with the returned data
+                if (data.portfolio_data) {
+                    currentPortfolio = data.portfolio_data;
+                    updateWorkflowSteps(currentPortfolio);
+                    updateUI();
+                } else {
+                    // Fallback: reload portfolio from API
+                    await loadPortfolio();
+                }
             } else {
                 // Fallback for old format
                 alert('Portfolio uploaded successfully!');
@@ -482,12 +489,30 @@ function updateUI() {
     console.log('Updating UI with portfolio:', currentPortfolio);
     if (!currentPortfolio) return;
     
-    // Update summary (always in USD)
+    // Update summary (handle null values for step 1)
     const summary = currentPortfolio.summary;
-    document.getElementById('totalValue').textContent = `$${(summary.total_value || summary.total_current_value || 0).toLocaleString()} USD`;
-    document.getElementById('totalReturn').textContent = `$${summary.total_return.toLocaleString()} USD`;
-    document.getElementById('returnPct').textContent = `${summary.return_percentage.toFixed(2)}%`;
-    document.getElementById('holdingsCount').textContent = summary.holdings_count;
+    
+    // Total Value - use current_value if available, otherwise show cost basis
+    const totalValue = summary.total_current_value !== null && summary.total_current_value !== undefined 
+        ? summary.total_current_value 
+        : (summary.total_cost_basis || 0);
+    document.getElementById('totalValue').textContent = `$${totalValue.toLocaleString()} USD`;
+    
+    // Total Return - only show if we have real data
+    if (summary.total_return !== null && summary.total_return !== undefined) {
+        document.getElementById('totalReturn').textContent = `$${summary.total_return.toLocaleString()} USD`;
+    } else {
+        document.getElementById('totalReturn').textContent = 'Fetch prices first';
+    }
+    
+    // Return Percentage - only show if we have real data  
+    if (summary.return_percentage !== null && summary.return_percentage !== undefined) {
+        document.getElementById('returnPct').textContent = `${summary.return_percentage.toFixed(2)}%`;
+    } else {
+        document.getElementById('returnPct').textContent = 'Fetch prices first';
+    }
+    
+    document.getElementById('holdingsCount').textContent = summary.holdings_count || 0;
     
     // Show currency conversion info if available
     if (currentPortfolio.currency_info && 
