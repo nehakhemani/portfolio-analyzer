@@ -18,13 +18,13 @@ class PortfolioWorkflowService:
         self.db_path = db_path
         self.market_service = StableMarketDataService(db_path)
     
-    def process_csv_upload(self, csv_content: str) -> Dict:
+    def process_csv_upload(self, csv_content: str, fetch_prices: bool = False) -> Dict:
         """
         STEP 1-6: Complete CSV processing workflow
         1. Upload CSV transactions
         2. Extract unique tickers
         3. Add tickers to DB
-        4. Fetch prices with delays
+        4. Optionally fetch prices (can be done later to avoid timeouts)
         5. Calculate returns where possible
         6. Return analysis-ready data
         """
@@ -48,11 +48,17 @@ class PortfolioWorkflowService:
             stored_count = self._step3_store_transactions(transactions_df)
             print(f"STEP 3 COMPLETE: {stored_count} transactions stored in database")
             
-            # Step 4: Fetch prices with proper delays
-            price_results = self._step4_fetch_prices_with_delays(unique_tickers)
-            successful_prices = price_results['successful']
-            failed_tickers = price_results['failed']
-            print(f"STEP 4 COMPLETE: {len(successful_prices)}/{len(unique_tickers)} prices fetched")
+            # Step 4: Optionally fetch prices (can be skipped for fast upload)
+            if fetch_prices:
+                price_results = self._step4_fetch_prices_with_delays(unique_tickers)
+                successful_prices = price_results['successful']
+                failed_tickers = price_results['failed']
+                print(f"STEP 4 COMPLETE: {len(successful_prices)}/{len(unique_tickers)} prices fetched")
+            else:
+                # Skip price fetching for fast upload - can be done later
+                successful_prices = {}
+                failed_tickers = list(unique_tickers)
+                print(f"STEP 4 SKIPPED: Price fetching can be done separately via 'Sync Prices' button")
             
             # Step 5: Calculate returns and identify manual entry needs
             portfolio_analysis = self._step5_calculate_smart_returns()

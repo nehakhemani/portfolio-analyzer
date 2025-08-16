@@ -375,9 +375,9 @@ def upload_portfolio():
         from services.portfolio_workflow import PortfolioWorkflowService
         workflow_service = PortfolioWorkflowService(app.config['DATABASE'])
         
-        # Execute complete workflow: CSV -> Tickers -> Prices -> Analysis
-        print("Starting complete portfolio workflow...")
-        workflow_result = workflow_service.process_csv_upload(content)
+        # Execute fast workflow: CSV -> Tickers -> Storage (skip price fetching to avoid timeout)
+        print("Starting fast portfolio workflow...")
+        workflow_result = workflow_service.process_csv_upload(content, fetch_prices=False)
         
         if not workflow_result.get('success', False):
             print(f"Workflow failed: {workflow_result.get('error', 'Unknown error')}")
@@ -394,13 +394,17 @@ def upload_portfolio():
         # Return comprehensive workflow results
         return jsonify({
             'success': True,
-            'message': 'Portfolio uploaded and processed successfully',
+            'message': 'Portfolio uploaded successfully! Use "Sync Prices" button to fetch market data.',
             'workflow_complete': True,
+            'fast_upload': True,
             'steps_completed': workflow_result['steps_completed'],
             'summary': workflow_result['summary'],
             'price_status': workflow_result['price_status'],
-            'next_steps': workflow_result['next_steps'],
-            'calculation_method': 'transaction_based_with_price_sync',
+            'next_steps': {
+                'immediate': 'Portfolio is ready! Click "Sync Prices" to fetch current market data.',
+                'recommendation': 'Use the Sync Prices button for rate-limited price fetching'
+            },
+            'calculation_method': 'transaction_based_fast_upload',
             'portfolio_data': {
                 'holdings_count': workflow_result['summary']['unique_tickers'],
                 'prices_fetched': workflow_result['summary']['prices_fetched'],

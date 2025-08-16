@@ -198,10 +198,22 @@ async function uploadPortfolio(file) {
             // Handle new workflow response
             if (data.workflow_complete && data.steps_completed) {
                 const summary = data.summary;
-                const priceStatus = data.price_status;
                 
-                alert(`✅ Portfolio Workflow Completed!
-                
+                if (data.fast_upload) {
+                    // Fast upload completed
+                    alert(`✅ Portfolio Uploaded Successfully!
+                    
+📊 Summary:
+• ${summary.transactions_processed} transactions processed
+• ${summary.unique_tickers} unique tickers found
+• Ready for price fetching
+
+🚀 Next Steps: ${data.next_steps.immediate}`);
+                } else {
+                    // Full workflow with prices completed
+                    const priceStatus = data.price_status;
+                    alert(`✅ Portfolio Workflow Completed!
+                    
 📊 Summary:
 • ${summary.transactions_processed} transactions processed
 • ${summary.unique_tickers} unique tickers found
@@ -209,6 +221,7 @@ async function uploadPortfolio(file) {
 • ${summary.manual_entry_needed} tickers need manual prices
 
 Next Steps: ${data.next_steps.recommendation}`);
+                }
                 
                 // Show statistical analysis button if ready
                 showStatisticalAnalysisButton(summary.prices_fetched >= 3);
@@ -289,8 +302,15 @@ async function fetchMarketData() {
 async function syncPricesBackground() {
     console.log('Starting background price sync...');
     const btn = document.getElementById('syncPricesBtn');
-    btn.textContent = 'Syncing Prices...';
+    btn.textContent = 'Syncing Prices... (This may take several minutes)';
     btn.disabled = true;
+    
+    // Show progress message
+    const progressMsg = document.createElement('div');
+    progressMsg.id = 'sync-progress';
+    progressMsg.style.cssText = 'background: #4caf50; color: white; padding: 10px; margin: 10px 0; border-radius: 5px; text-align: center;';
+    progressMsg.textContent = '🔄 Fetching prices with rate limiting (5 seconds between batches)...';
+    btn.parentNode.insertBefore(progressMsg, btn.nextSibling);
     
     try {
         const response = await authenticatedFetch(`${API_BASE}/sync-prices`, {
@@ -315,6 +335,12 @@ async function syncPricesBackground() {
     } finally {
         btn.textContent = 'Sync Prices';
         btn.disabled = false;
+        
+        // Remove progress message
+        const progressMsg = document.getElementById('sync-progress');
+        if (progressMsg) {
+            progressMsg.remove();
+        }
     }
 }
 
