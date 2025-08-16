@@ -530,8 +530,9 @@ function updateHoldingsManagement() {
         return;
     }
     
-    // Filter out holdings with zero or negative values
-    const validHoldings = currentPortfolio.holdings.filter(h => h.current_value > 0);
+    // Show ALL holdings - including those that need manual prices
+    // Only filter out holdings with zero quantity (fully sold positions)
+    const validHoldings = currentPortfolio.holdings.filter(h => h.quantity > 0);
     
     if (validHoldings.length === 0) {
         document.getElementById('holdingsManagement').style.display = 'none';
