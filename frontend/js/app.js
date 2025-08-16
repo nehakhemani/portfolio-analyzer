@@ -225,27 +225,34 @@ Next Steps: ${data.next_steps.recommendation}`);
             console.log('Response statusText:', response.statusText);
             console.log('Response URL:', response.url);
             
+            // Read the response body only once
+            let responseText;
+            try {
+                responseText = await response.text();
+            } catch (readError) {
+                alert('Error reading server response: ' + readError.message);
+                return;
+            }
+            
             if (contentType && contentType.includes('text/html')) {
-                const htmlText = await response.text();
-                console.log('HTML response (first 500 chars):', htmlText.substring(0, 500));
+                console.log('HTML response (first 500 chars):', responseText.substring(0, 500));
                 
                 // Check if it's a Flask error page
-                if (htmlText.includes('Werkzeug') || htmlText.includes('Internal Server Error')) {
+                if (responseText.includes('Werkzeug') || responseText.includes('Internal Server Error')) {
                     alert('Server Error: There was an internal server error. Check the server console for details.');
-                } else if (htmlText.includes('404') || htmlText.includes('Not Found')) {
+                } else if (responseText.includes('404') || responseText.includes('Not Found')) {
                     alert('Upload Error: Upload endpoint not found. Check server configuration.');
                 } else {
                     alert('Server returned HTML instead of JSON. This usually means a server error occurred. Check server logs.');
                 }
             } else {
                 try {
-                    const error = await response.json();
+                    const error = JSON.parse(responseText);
                     console.log('JSON error response:', error);
                     alert('Error uploading portfolio: ' + (error.error || 'Unknown error'));
                 } catch (jsonError) {
-                    const text = await response.text();
-                    console.log('Non-JSON response text:', text);
-                    alert('Server error (status ' + response.status + '): ' + text.substring(0, 100));
+                    console.log('Non-JSON response text:', responseText);
+                    alert('Server error (status ' + response.status + '): ' + responseText.substring(0, 100));
                 }
             }
         }
