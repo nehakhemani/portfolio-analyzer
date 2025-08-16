@@ -793,3 +793,89 @@ class StableMarketDataService:
         except Exception as e:
             print(f"Cache cleanup failed: {e}")
             return 0
+    
+    def set_manual_price(self, ticker: str, price: float, currency: str = 'USD', notes: str = None, expires_hours: int = None):
+        """Set manual price override for a ticker"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            now = datetime.now()
+            expires_at = None
+            if expires_hours:
+                expires_at = now + timedelta(hours=expires_hours)
+            
+            # Insert or replace manual price
+            cursor.execute('''
+                INSERT OR REPLACE INTO manual_prices 
+                (ticker, price, currency, set_by, timestamp, notes, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (ticker.upper(), price, currency.upper(), 'user', now, notes, expires_at))
+            
+            conn.commit()
+            conn.close()
+            
+            print(f"MANUAL PRICE SET: {ticker} = ${price:.2f} {currency}")
+            return True
+            
+        except Exception as e:
+            print(f"Failed to set manual price for {ticker}: {e}")
+            return False
+    
+    def remove_manual_price(self, ticker: str):
+        """Remove manual price override for a ticker"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('DELETE FROM manual_prices WHERE ticker = ?', (ticker.upper(),))
+            
+            deleted_count = cursor.rowcount
+            conn.commit()
+            conn.close()
+            
+            if deleted_count > 0:
+                print(f"MANUAL PRICE REMOVED: {ticker}")
+                return True
+            else:
+                print(f"NO MANUAL PRICE FOUND: {ticker}")
+                return False
+                
+        except Exception as e:
+            print(f"Failed to remove manual price for {ticker}: {e}")
+            return False
+    
+    def get_manual_prices(self):
+        """Get all current manual price overrides"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT ticker, price, currency, timestamp, notes, expires_at
+                FROM manual_prices
+                WHERE expires_at IS NULL OR expires_at > ?
+                ORDER BY ticker
+            ''', (datetime.now(),))
+            
+            manual_prices = []
+            for row in cursor.fetchall():
+                ticker, price, currency, timestamp_str, notes, expires_at = row
+                timestamp = datetime.fromisoformat(timestamp_str)
+                
+                manual_prices.append({
+                    'ticker': ticker,
+                    'price': float(price),
+                    'currency': currency,
+                    'timestamp': timestamp,
+                    'notes': notes,
+                    'expires_at': expires_at,
+                    'age_hours': (datetime.now() - timestamp).total_seconds() / 3600
+                })
+            
+            conn.close()
+            return manual_prices
+            
+        except Exception as e:
+            print(f"Failed to get manual prices: {e}")
+            return []
