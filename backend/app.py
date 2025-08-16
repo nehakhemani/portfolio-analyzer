@@ -510,27 +510,28 @@ def get_ml_recommendations():
         if not portfolio_data['holdings']:
             return jsonify({'recommendations': [], 'message': 'No holdings found. Please upload transaction data.'})
         
-        # Convert to DataFrame format expected by ML engine
+        # Use the new data format directly - the ML engine now supports it
         holdings_data = []
         for holding in portfolio_data['holdings']:
+            print(f"Processing holding: {holding.get('ticker')} - Current Value: {holding.get('current_value')}, Return: {holding.get('return_percentage')}")
             holdings_data.append({
                 'ticker': holding['ticker'],
-                'end_value': holding['current_value'],
-                'start_value': holding['cost_basis'],
-                'return_percentage': holding['return_percentage'],
-                'current_price': holding['current_price'],
-                'quantity': holding['quantity'],
-                'avg_cost_basis': holding['avg_cost'],
-                'currency': holding['currency'],
-                'exchange': holding['exchange'],
-                'dividends': 0,  # TODO: Calculate from dividend transactions
-                'fees': 0,       # TODO: Calculate from transaction fees
-                'start_price': holding['avg_cost'],  # Use avg_cost as start_price
-                'end_price': holding['current_price']  # Current market price
+                'current_value': holding.get('current_value'),
+                'cost_basis': holding.get('cost_basis', 0),
+                'return_percentage': holding.get('return_percentage'),
+                'current_price': holding.get('current_price'),
+                'quantity': holding.get('quantity', 0),
+                'avg_cost': holding.get('avg_cost', 0),
+                'currency': holding.get('currency', 'USD'),
+                'exchange': holding.get('exchange', ''),
+                'step': holding.get('step', 'unknown')
             })
         
         holdings_df = pd.DataFrame(holdings_data)
-        print(f"Generating enhanced ML recommendations for {len(holdings_df)} holdings")
+        print(f"Holdings DataFrame shape: {holdings_df.shape}")
+        print(f"Holdings DataFrame columns: {list(holdings_df.columns)}")
+        print(f"Sample holding data: {holdings_data[0] if holdings_data else 'No data'}")
+        
         # Generate enhanced ML recommendations
         recommendations = enhanced_ml_engine.generate_recommendations(holdings_df)
         
