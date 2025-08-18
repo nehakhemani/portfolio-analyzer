@@ -1,0 +1,163 @@
+# Docker Compose for Portfolio Analyzer with PostgreSQL
+# Production-ready setup with proper volumes and networking
+
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: portfolio_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: portfolio_analyzer
+      POSTGRES_USER: portfolio_user
+      POSTGRES_PASSWORD: portfolio_pass
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./database/seed_data.sql:/docker-entrypoint-initdb.d/02-seed-data.sql
+    networks:
+      - portfolio_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portfolio_user -d portfolio_analyzer"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and session management (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: portfolio_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - portfolio_network
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+
+  # Portfolio Analyzer Flask App
+  app:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: portfolio_app
+    restart: unless-stopped
+    environment:
+      # Database Configuration
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: portfolio_analyzer
+      DB_USER: portfolio_user
+      DB_PASSWORD: portfolio_pass
+      DB_MIN_CONNECTIONS: 5
+      DB_MAX_CONNECTIONS: 20
+      
+      # Redis Configuration (optional)
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      
+      # Application Configuration
+      FLASK_ENV: production
+      FLASK_DEBUG: false
+      SECRET_KEY: your-secret-key-change-in-production
+      
+      # API Keys (set these in production)
+      ALPHA_VANTAGE_API_KEY: demo
+      FINNHUB_API_KEY: demo
+      
+      # Job Scheduler
+      ENABLE_BATCH_JOBS: true
+      BATCH_JOB_SCHEDULE: "17:00"  # 5PM daily
+      
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - app_logs:/app/logs
+    networks:
+      - portfolio_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Scheduled Jobs Service (separate container for better scalability)
+  scheduler:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.scheduler
+    container_name: portfolio_scheduler
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: portfolio_analyzer
+      DB_USER: portfolio_user
+      DB_PASSWORD: portfolio_pass
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      
+      # Job Configuration
+      DAILY_PRICE_JOB_TIME: "17:00"
+      WEEKEND_CATCHUP_TIME: "09:00"
+      CLEANUP_JOB_TIME: "02:00"
+      
+      # API Configuration with higher timeouts for batch jobs
+      BATCH_API_TIMEOUT: 300
+      BATCH_SIZE: 50
+      MAX_RETRIES: 3
+      
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - scheduler_logs:/app/logs
+    networks:
+      - portfolio_network
+
+  # pgAdmin for database management (optional, for development)
+  pgadmin:
+    image: dpage/pgadmin4:7
+    container_name: portfolio_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@portfolio.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - portfolio_network
+    depends_on:
+      - postgres
+    profiles:
+      - dev  # Only start with --profile dev
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+  app_logs:
+    driver: local
+  scheduler_logs:
+    driver: local
+
+networks:
+  portfolio_network:
+    driver: bridge

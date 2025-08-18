@@ -1,0 +1,37 @@
+# Dockerfile for Scheduled Jobs Service
+# Separate container for batch job processing
+
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Create app user
+RUN groupadd -r scheduler && useradd -r -g scheduler scheduler
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    postgresql-client \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install dependencies
+COPY requirements_postgresql.txt .
+RUN pip install --no-cache-dir -r requirements_postgresql.txt
+
+# Copy application code
+COPY . .
+
+# Create log directory
+RUN mkdir -p logs && chown -R scheduler:scheduler /app
+
+# Switch to non-root user
+USER scheduler
+
+# Run the scheduler
+CMD ["python", "-m", "jobs.daily_price_batch"]
