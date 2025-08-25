@@ -1,0 +1,42 @@
+# Docker Compose for Local Development - Multi-User Portfolio Analyzer
+version: '3.8'
+
+services:
+  portfolio-app:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    container_name: portfolio-analyzer-local
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount source code for hot reloading during development
+      - ./backend:/app/backend
+      - ./frontend:/app/frontend
+      - ./uploads:/app/uploads
+      # Persist database across container restarts
+      - portfolio_data:/app/data
+    environment:
+      # Development settings
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+      - PORT=8080
+      # API keys for price fetching
+      - ALPHA_VANTAGE_API_KEY=8TC1QT08BL9F04B1
+      - FINNHUB_API_KEY=d2kfr9hr01qs23a239vgd2kfr9hr01qs23a23a00
+      # Security
+      - SECRET_KEY=dev-secret-key-change-in-production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  portfolio_data:
+    driver: local
+
+networks:
+  default:
+    name: portfolio-local-network

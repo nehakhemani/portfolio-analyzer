@@ -55,7 +55,7 @@ function showUserInfo(username) {
 
 async function logout() {
     try {
-        await fetch(`${API_BASE}/logout`, {
+        await fetch(`${API_BASE}/auth/logout`, {
             method: 'POST',
             credentials: 'include'
         });
@@ -194,14 +194,12 @@ function updateWorkflowSteps(portfolioData) {
         step3.style.display = 'none';
         step4.style.display = 'none';
         additionalActions.style.display = 'none';
-    } else if (portfolioData.workflow_step === 'positions_loaded') {
-        // Step 1 complete - show step 2
+    } else if (portfolioData.workflow_step === 'batch_job_ready') {
+        // Step 1 complete - show step 2 (batch job controls)
         step1.classList.add('completed');
         step1.classList.remove('active');
         step2.style.display = 'block';
         step2.classList.add('active');
-        step3.style.display = 'none';
-        step4.style.display = 'none';
         additionalActions.style.display = 'block';
     } else if (portfolioData.workflow_step === 'prices_fetched') {
         // Step 2 complete - show step 3 and 4
@@ -231,7 +229,7 @@ async function fetchLivePrices() {
     btn.disabled = true;
     
     try {
-        const response = await authenticatedFetch(`${API_BASE}/fetch-live-prices`, {
+        const response = await authenticatedFetch(`${API_BASE}/sync-prices`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -270,7 +268,7 @@ async function fetchLivePrices() {
 async function refreshPortfolioWithPrices() {
     // Refresh portfolio by fetching live prices (including manual overrides) without showing alerts
     try {
-        const response = await authenticatedFetch(`${API_BASE}/fetch-live-prices`, {
+        const response = await authenticatedFetch(`${API_BASE}/sync-prices`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -339,15 +337,22 @@ async function uploadPortfolio(file) {
             if (data.workflow_complete && data.steps_completed) {
                 const summary = data.summary;
                 
-                // Show success message
+                // Show success message - safely format values
+                const transactionsCount = summary.transactions_processed || 0;
+                const tickersCount = summary.unique_tickers || 0;
+                const costBasis = summary.total_cost_basis;
+                const costBasisDisplay = (costBasis && typeof costBasis === 'number') 
+                    ? `$${costBasis.toLocaleString()}` 
+                    : 'N/A';
+                
                 alert(`✅ Step 1 Complete: Transactions Uploaded!
                 
 📊 Summary:
-• ${summary.transactions_processed} transactions processed
-• ${summary.unique_tickers} unique tickers found
-• Cost basis: $${summary.total_cost_basis?.toLocaleString() || 'N/A'}
+• ${transactionsCount} transactions processed
+• ${tickersCount} unique tickers found
+• Cost basis: ${costBasisDisplay}
 
-🚀 Next: Click "Fetch Live Market Prices" to continue`);
+🚀 Next: Use "🔄 Run Batch Job" to fetch prices`);
                 
                 // Update current portfolio with the returned data
                 if (data.portfolio_data) {
@@ -519,30 +524,18 @@ function updateUI() {
     console.log('Updating UI with portfolio:', currentPortfolio);
     if (!currentPortfolio) return;
     
-    // Update summary (handle null values for step 1)
+    // Update summary - only show cost basis
     const summary = currentPortfolio.summary;
     
-    // Total Value - use current_value if available, otherwise show cost basis
-    const totalValue = summary.total_current_value !== null && summary.total_current_value !== undefined 
-        ? summary.total_current_value 
-        : (summary.total_cost_basis || 0);
+    // Show total investment value (cost basis)
+    const totalValue = summary.total_investment_value || 0;
     document.getElementById('totalValue').textContent = `$${totalValue.toLocaleString()} USD`;
     
-    // Total Return - only show if we have real data
-    if (summary.total_return !== null && summary.total_return !== undefined) {
-        document.getElementById('totalReturn').textContent = `$${summary.total_return.toLocaleString()} USD`;
-    } else {
-        document.getElementById('totalReturn').textContent = 'Fetch prices first';
-    }
+    // Hide return calculations - batch jobs will handle prices separately
+    document.getElementById('totalReturn').textContent = 'Run batch job for prices';
+    document.getElementById('returnPct').textContent = 'Run batch job for prices';
     
-    // Return Percentage - only show if we have real data  
-    if (summary.return_percentage !== null && summary.return_percentage !== undefined) {
-        document.getElementById('returnPct').textContent = `${summary.return_percentage.toFixed(2)}%`;
-    } else {
-        document.getElementById('returnPct').textContent = 'Fetch prices first';
-    }
-    
-    document.getElementById('holdingsCount').textContent = summary.holdings_count || 0;
+    document.getElementById('holdingsCount').textContent = summary.total_holdings || 0;
     
     // Show currency conversion info if available
     if (currentPortfolio.currency_info && 
@@ -553,6 +546,10 @@ function updateUI() {
     
     // Update last update time
     document.getElementById('lastUpdate').textContent = new Date().toLocaleString();
+    
+    // Check if we have price data for statistical analysis
+    const holdingsWithPrices = (currentPortfolio.holdings || []).filter(h => h.current_price !== null && h.current_price !== undefined).length;
+    showStatisticalAnalysisButton(holdingsWithPrices >= 2);
     
     // Update charts
     updateCharts();
@@ -576,6 +573,10 @@ function updateCharts() {
     if (window.performanceChart && typeof window.performanceChart.destroy === 'function') {
         window.performanceChart.destroy();
     }
+    
+    // Skip charts for now - simplified version shows only cost basis
+    console.log('Charts disabled in simplified batch-job-only mode');
+    return;
     
    // Allocation Chart - Filter out zero/negative value holdings
     const holdings = currentPortfolio.holdings.filter(h => h.current_value > 0);
@@ -681,9 +682,12 @@ function updateHoldingsManagement() {
         return;
     }
     
-    // Show ALL holdings - including those that need manual prices
-    // Only filter out holdings with zero quantity (fully sold positions)
-    const validHoldings = currentPortfolio.holdings.filter(h => h.quantity > 0);
+    // Show holdings with simplified display (cost basis only) - filter out zero-value holdings
+    const validHoldings = (currentPortfolio.holdings || []).filter(holding => {
+        return holding.quantity > 0 && 
+               holding.avg_cost_basis > 0 && 
+               holding.total_investment_value > 0.01;
+    });
     
     if (validHoldings.length === 0) {
         document.getElementById('holdingsManagement').style.display = 'none';
@@ -695,75 +699,27 @@ function updateHoldingsManagement() {
     
     holdingsManagement.style.display = 'block';
     
-    // Create holdings table
+    // Create simplified holdings table (cost basis only)
     const holdingsHTML = `
         <table class="holdings-table">
             <thead>
                 <tr>
                     <th>Ticker</th>
-                    <th>Exchange</th>
-                    <th>Currency</th>
                     <th>Quantity</th>
                     <th>Avg Cost</th>
-                    <th>Cost Basis</th>
-                    <th>Current Price</th>
-                    <th>Current Value</th>
-                    <th>Return</th>
-                    <th>Return %</th>
-                    <th>Actions</th>
+                    <th>Total Investment</th>
+                    <th>Status</th>
                 </tr>
             </thead>
             <tbody>
                 ${validHoldings.map(holding => {
-                    const returnAmount = holding.total_return;
-                    const returnPct = holding.return_percentage;
-                    
-                    // Handle None values for missing price data
-                    const currentValueDisplay = holding.current_value !== null ? 
-                        formatCurrency(holding.current_value, holding.currency) : 
-                        '<span class="no-data">❌ No Price Data</span>';
-                    
-                    const returnDisplay = returnAmount !== null ? 
-                        formatCurrency(returnAmount, holding.currency) : 
-                        '<span class="no-data">❌ Set Price First</span>';
-                    
-                    const returnPctDisplay = returnPct !== null ? 
-                        `${returnPct.toFixed(1)}%` : 
-                        '<span class="no-data">❌ Set Price First</span>';
-                    
-                    const returnClass = returnAmount !== null ? 
-                        (returnAmount >= 0 ? 'positive' : 'negative') : 'no-data';
-                    
                     return `
                         <tr>
                             <td class="ticker">${holding.ticker}</td>
-                            <td>${holding.exchange || 'N/A'}</td>
-                            <td><span class="currency-badge">${holding.currency || 'USD'}</span></td>
-                            <td>${holding.quantity.toFixed(4)}</td>
-                            <td>${formatCurrency(holding.avg_cost, holding.currency)}</td>
-                            <td>${formatCurrency(holding.cost_basis, holding.currency)}</td>
-                            <td>${formatPriceWithStaleness(holding)}</td>
-                            <td>${currentValueDisplay}</td>
-                            <td class="${returnClass}">
-                                ${returnDisplay}
-                            </td>
-                            <td class="${returnClass}">
-                                ${returnPctDisplay}
-                            </td>
-                            <td>
-                                <div class="holding-actions">
-                                    <button onclick="showManualPriceDialog('${holding.ticker}', ${holding.current_price || holding.avg_cost})" 
-                                            class="manual-price-btn" 
-                                            title="Set manual price for ${holding.ticker}">
-                                        💰
-                                    </button>
-                                    <button onclick="deleteHolding('${holding.ticker}')" 
-                                            class="delete-btn" 
-                                            title="Delete ${holding.ticker}">
-                                        ✕
-                                    </button>
-                                </div>
-                            </td>
+                            <td>${holding.quantity ? holding.quantity.toFixed(4) : '0'}</td>
+                            <td>${formatCurrency(holding.avg_cost_basis || 0, 'USD')}</td>
+                            <td>${formatCurrency(holding.total_investment_value || 0, 'USD')}</td>
+                            <td><span class="status-batch">Run batch job for prices</span></td>
                         </tr>
                     `;
                 }).join('')}
@@ -920,7 +876,7 @@ async function setManualPrice(ticker) {
             expires_hours: expiresHours ? parseInt(expiresHours) : null
         };
         
-        const response = await authenticatedFetch(`${API_BASE}/manual-price`, {
+        const response = await authenticatedFetch(`${API_BASE}/set-manual-price`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -1673,6 +1629,317 @@ function initializeTransactionForm() {
     toggleTransactionFields(); // Initialize field visibility
 }
 
+// Batch job functions
+async function triggerBatchJob() {
+    const btn = event.target;
+    const originalText = btn.textContent;
+    
+    btn.textContent = '🔄 Starting Batch Job...';
+    btn.disabled = true;
+    
+    try {
+        const response = await authenticatedFetch(`${API_BASE}/trigger-batch-job`, {
+            method: 'POST'
+        });
+        
+        if (response && response.ok) {
+            const result = await response.json();
+            alert(`✅ ${result.message}\n\n💡 ${result.note}`);
+            
+            // Auto-refresh job status and monitor completion
+            monitorBatchJobCompletion();
+        } else if (response) {
+            const error = await response.json();
+            alert('❌ Error triggering batch job: ' + (error.error || 'Unknown error'));
+        }
+    } catch (error) {
+        alert('❌ Error triggering batch job: ' + error.message);
+    } finally {
+        btn.textContent = originalText;
+        btn.disabled = false;
+    }
+}
+
+async function monitorBatchJobCompletion() {
+    console.log('🔍 Starting batch job monitoring...');
+    const maxAttempts = 30; // Monitor for up to 5 minutes (30 * 10 seconds)
+    let attempts = 0;
+    let lastJobId = null;
+    
+    // Get the current latest job ID to track the new one
+    try {
+        const initialResponse = await authenticatedFetch(`${API_BASE}/batch-job-status`);
+        if (initialResponse && initialResponse.ok) {
+            const initialData = await initialResponse.json();
+            if (initialData.recent_jobs && initialData.recent_jobs.length > 0) {
+                lastJobId = initialData.recent_jobs[0].id;
+                console.log('📋 Initial job ID for monitoring:', lastJobId);
+            }
+        }
+    } catch (error) {
+        console.error('Error getting initial job status:', error);
+    }
+    
+    const checkStatus = async () => {
+        try {
+            console.log(`🔄 Checking batch job status (attempt ${attempts + 1}/${maxAttempts})...`);
+            const response = await authenticatedFetch(`${API_BASE}/batch-job-status`);
+            
+            if (response && response.ok) {
+                const data = await response.json();
+                
+                if (data.recent_jobs && data.recent_jobs.length > 0) {
+                    const mostRecentJob = data.recent_jobs[0]; // Most recent job first
+                    
+                    // Only monitor jobs newer than our baseline
+                    if (lastJobId === null || mostRecentJob.id > lastJobId) {
+                        console.log(`📊 Monitoring job #${mostRecentJob.id} - Status: ${mostRecentJob.status}`);
+                        
+                        if (mostRecentJob.status === 'completed') {
+                            // Job completed - show completion message
+                            const successRate = mostRecentJob.success_rate || 0;
+                            const successfulTickers = mostRecentJob.tickers_successful || 0;
+                            const totalTickers = mostRecentJob.tickers_processed || 0;
+                            const duration = mostRecentJob.completed_at ? 
+                                Math.round((new Date(mostRecentJob.completed_at) - new Date(mostRecentJob.started_at)) / 1000) : 0;
+                            
+                            console.log('🎉 Batch job completed! Showing completion message...');
+                            alert(`🎉 Batch Job Completed Successfully!\n\n📊 Results:\n• ${successfulTickers}/${totalTickers} tickers processed (${successRate.toFixed(1)}% success)\n• Duration: ${duration} seconds\n\n🚀 Next Step: Click "💹 Show Prices" to view your updated portfolio with current market prices and returns!`);
+                            return; // Stop monitoring
+                        } else if (mostRecentJob.status === 'failed') {
+                            console.log('❌ Batch job failed! Showing failure message...');
+                            alert(`❌ Batch job failed.\n\nPlease try running the batch job again or check if you have valid portfolio data.`);
+                            return; // Stop monitoring
+                        } else if (mostRecentJob.status === 'running') {
+                            // Still running, continue monitoring
+                            attempts++;
+                            if (attempts < maxAttempts) {
+                                setTimeout(checkStatus, 8000); // Check again in 8 seconds (faster monitoring)
+                            } else {
+                                console.log('⏰ Batch job monitoring timeout reached');
+                                alert(`⏰ Batch job is taking longer than expected.\n\nYou can wait a bit longer and click "💹 Show Prices" to see if any prices were fetched.`);
+                            }
+                        }
+                    } else {
+                        // No new job yet, keep waiting
+                        attempts++;
+                        if (attempts < maxAttempts) {
+                            setTimeout(checkStatus, 5000); // Check more frequently for new jobs
+                        } else {
+                            console.log('⏰ No new batch job detected within timeout period');
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error monitoring batch job:', error);
+            attempts++;
+            if (attempts < maxAttempts) {
+                setTimeout(checkStatus, 10000); // Retry on error
+            }
+        }
+    };
+    
+    // Start monitoring after 5 seconds (give the job time to start)
+    setTimeout(checkStatus, 5000);
+}
+
+async function showBatchJobStatus() {
+    try {
+        const response = await authenticatedFetch(`${API_BASE}/batch-job-status`);
+        
+        if (response && response.ok) {
+            const data = await response.json();
+            
+            // Format recent jobs
+            let jobsInfo = '📋 Recent Batch Jobs:\n\n';
+            
+            if (data.recent_jobs && data.recent_jobs.length > 0) {
+                data.recent_jobs.forEach((job, index) => {
+                    const status = job.status === 'completed' ? '✅' : 
+                                  job.status === 'running' ? '🔄' : '❌';
+                    const duration = job.completed_at ? 
+                        Math.round((new Date(job.completed_at) - new Date(job.started_at)) / 1000) : 
+                        'Running...';
+                    
+                    jobsInfo += `${status} Job #${job.id} (${job.job_type})\n`;
+                    jobsInfo += `   Started: ${new Date(job.started_at).toLocaleString()}\n`;
+                    jobsInfo += `   Status: ${job.status}\n`;
+                    jobsInfo += `   Duration: ${duration}${duration !== 'Running...' ? 's' : ''}\n`;
+                    if (job.tickers_processed > 0) {
+                        jobsInfo += `   Success: ${job.tickers_successful}/${job.tickers_processed} (${job.success_rate.toFixed(1)}%)\n`;
+                    }
+                    jobsInfo += '\n';
+                });
+            } else {
+                jobsInfo += 'No batch jobs found.\n\n';
+            }
+            
+            // Add statistics
+            const stats = data.statistics;
+            jobsInfo += `📊 Database Statistics:\n`;
+            jobsInfo += `• Tickers with prices: ${stats.tickers_with_prices}\n`;
+            jobsInfo += `• Prices fetched today: ${stats.prices_fetched_today}\n`;
+            
+            alert(jobsInfo);
+        } else if (response) {
+            const error = await response.json();
+            alert('❌ Error getting batch job status: ' + (error.error || 'Unknown error'));
+        }
+    } catch (error) {
+        alert('❌ Error getting batch job status: ' + error.message);
+    }
+}
+
+async function refreshPricesDisplay() {
+    const btn = event.target;
+    const originalText = btn.textContent;
+    
+    btn.textContent = '💹 Loading Prices...';
+    btn.disabled = true;
+    
+    try {
+        const response = await authenticatedFetch(`${API_BASE}/latest-prices`);
+        
+        if (response && response.ok) {
+            const data = await response.json();
+            
+            // Update current portfolio with price data
+            currentPortfolio = data;
+            
+            // Update UI with prices
+            updateUIWithPrices(data);
+            
+            const summary = data.summary;
+            const holdingsWithPrices = summary.holdings_with_prices;
+            const totalHoldings = summary.total_holdings;
+            
+            if (holdingsWithPrices > 0) {
+                alert(`💹 Prices loaded successfully!\n\n📊 Holdings with prices: ${holdingsWithPrices}/${totalHoldings}\n\n💡 Check the updated holdings table and summary cards below.`);
+            } else {
+                alert(`⚠️ No prices found in database.\n\nRun a batch job first to fetch prices, then use this button to display them.`);
+            }
+        } else if (response) {
+            const error = await response.json();
+            alert('❌ Error loading prices: ' + (error.error || 'Unknown error'));
+        }
+    } catch (error) {
+        alert('❌ Error loading prices: ' + error.message);
+    } finally {
+        btn.textContent = originalText;
+        btn.disabled = false;
+    }
+}
+
+function updateUIWithPrices(portfolioWithPrices) {
+    if (!portfolioWithPrices || !portfolioWithPrices.summary) return;
+    
+    const summary = portfolioWithPrices.summary;
+    
+    // Update summary cards with actual prices and returns
+    document.getElementById('totalValue').textContent = `$${summary.total_investment_value.toLocaleString()} USD`;
+    
+    if (summary.total_current_value !== null) {
+        document.getElementById('totalReturn').textContent = `$${summary.total_return.toLocaleString()} USD`;
+        document.getElementById('returnPct').textContent = `${summary.total_return_pct.toFixed(2)}%`;
+        
+        // Color code the return values
+        const returnElement = document.getElementById('totalReturn');
+        const returnPctElement = document.getElementById('returnPct');
+        
+        if (summary.total_return >= 0) {
+            returnElement.style.color = '#4ade80';
+            returnPctElement.style.color = '#4ade80';
+        } else {
+            returnElement.style.color = '#f87171';
+            returnPctElement.style.color = '#f87171';
+        }
+    }
+    
+    document.getElementById('holdingsCount').textContent = summary.total_holdings || 0;
+    
+    // Update holdings table with prices
+    updateHoldingsWithPrices(portfolioWithPrices.holdings);
+    
+    // Update last update time
+    document.getElementById('lastUpdate').textContent = new Date().toLocaleString();
+    
+    // Enable statistical analysis button if we have enough holdings with prices
+    const holdingsWithPrices = summary.holdings_with_prices || 0;
+    showStatisticalAnalysisButton(holdingsWithPrices >= 2);
+}
+
+function updateHoldingsWithPrices(holdings) {
+    if (!holdings || holdings.length === 0) {
+        document.getElementById('holdingsManagement').style.display = 'none';
+        return;
+    }
+    
+    // Filter out holdings with zero or negligible values
+    const validHoldings = holdings.filter(holding => {
+        return holding.quantity > 0 && 
+               holding.avg_cost_basis > 0 && 
+               holding.total_investment_value > 0.01 &&
+               (!holding.current_value || holding.current_value > 0.01);
+    });
+    
+    if (validHoldings.length === 0) {
+        document.getElementById('holdingsManagement').style.display = 'none';
+        return;
+    }
+    
+    const holdingsManagement = document.getElementById('holdingsManagement');
+    const holdingsList = document.getElementById('holdingsList');
+    
+    holdingsManagement.style.display = 'block';
+    
+    // Create holdings table with prices
+    const holdingsHTML = `
+        <table class="holdings-table">
+            <thead>
+                <tr>
+                    <th>Ticker</th>
+                    <th>Quantity</th>
+                    <th>Avg Cost</th>
+                    <th>Current Price</th>
+                    <th>Current Value</th>
+                    <th>Return ($)</th>
+                    <th>Return (%)</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${validHoldings.map(holding => {
+                    const hasPrice = holding.has_price && holding.current_price !== null;
+                    const returnAmount = holding.return_amount || 0;
+                    const returnPct = holding.return_pct || 0;
+                    const returnClass = returnAmount >= 0 ? 'positive' : 'negative';
+                    
+                    return `
+                        <tr>
+                            <td class="ticker">${holding.ticker}</td>
+                            <td>${holding.quantity ? holding.quantity.toFixed(4) : '0'}</td>
+                            <td>${formatCurrency(holding.avg_cost_basis || 0, 'USD')}</td>
+                            <td>${hasPrice ? formatCurrency(holding.current_price, 'USD') : 'No price'}</td>
+                            <td>${hasPrice ? formatCurrency(holding.current_value, 'USD') : formatCurrency(holding.total_investment_value || 0, 'USD')}</td>
+                            <td class="${returnClass}">${hasPrice ? formatCurrency(returnAmount, 'USD') : 'N/A'}</td>
+                            <td class="${returnClass}">${hasPrice ? returnPct.toFixed(2) + '%' : 'N/A'}</td>
+                            <td>
+                                ${hasPrice ? 
+                                    `<span class="status-success">✅ ${holding.price_source} (${new Date(holding.price_timestamp).toLocaleDateString()})</span>` :
+                                    `<span class="status-batch">🔄 No batch price</span>`
+                                }
+                            </td>
+                        </tr>
+                    `;
+                }).join('')}
+            </tbody>
+        </table>
+    `;
+    
+    holdingsList.innerHTML = holdingsHTML;
+}
+
 // Make functions globally available
 window.fetchMarketData = fetchMarketData;
 window.exportData = exportData;
@@ -1685,3 +1952,5 @@ window.downloadSample = downloadSample;
 window.clearPortfolio = clearPortfolio;
 window.showCacheStats = showCacheStats;
 window.toggleTransactionFields = toggleTransactionFields;
+window.triggerBatchJob = triggerBatchJob;
+window.refreshPricesDisplay = refreshPricesDisplay;

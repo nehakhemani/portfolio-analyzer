@@ -53,24 +53,14 @@
             </div>
             
             <div class="workflow-step" id="step2" style="display: none;">
-                <h3>Step 2: Fetch Live Prices</h3>
-                <button id="fetchPricesBtn" onclick="fetchLivePrices()" style="background: linear-gradient(45deg, #28a745, #20c997);">
-                    🔍 Fetch Live Market Prices
+                <h3>Step 2: Batch Job Management & Prices</h3>
+                <button onclick="triggerBatchJob()" style="background: linear-gradient(45deg, #17a2b8, #138496);">
+                    🔄 Run Batch Job
                 </button>
-                <p>Get current market prices to calculate returns</p>
-            </div>
-            
-            <div class="workflow-step" id="step3" style="display: none;">
-                <h3>Step 3: Manual Price Entry (if needed)</h3>
-                <p>For holdings where price fetching failed, use the 💰 button to set manual prices</p>
-            </div>
-            
-            <div class="workflow-step" id="step4" style="display: none;">
-                <h3>Step 4: Portfolio Analysis</h3>
-                <button id="analyzeBtn" onclick="runCompleteAnalysis()" style="background: linear-gradient(45deg, #667eea, #764ba2);">
-                    📊 Run ML + Statistical Analysis
+                <button onclick="refreshPricesDisplay()" style="background: linear-gradient(45deg, #28a745, #1e7e34); margin-left: 10px;">
+                    💹 Show Prices
                 </button>
-                <p>Comprehensive portfolio analysis with recommendations</p>
+                <p>Run batch job to fetch prices, then view current prices</p>
             </div>
             
             <div class="additional-actions" style="margin-top: 20px; display: none;" id="additionalActions">
@@ -79,6 +69,9 @@
                 </button>
                 <button onclick="exportData()">
                     Export Analysis
+                </button>
+                <button onclick="triggerBatchJob()" style="background: linear-gradient(45deg, #17a2b8, #138496);">
+                    🔄 Run Batch Job
                 </button>
                 <button onclick="clearPortfolio()" style="background: linear-gradient(45deg, #ff6b6b, #ee5a52);">
                     Clear Portfolio
@@ -182,19 +175,19 @@
         <!-- Summary Cards -->
         <section class="summary-cards">
             <div class="card">
-                <h3>Portfolio Value</h3>
+                <h3>Total Investment</h3>
                 <div class="value" id="totalValue">$0</div>
-                <small class="card-note">Cost basis until prices fetched</small>
+                <small class="card-note">Cost basis from transactions</small>
             </div>
             <div class="card">
                 <h3>Total Return</h3>
-                <div class="value" id="totalReturn">Fetch prices first</div>
-                <small class="card-note">Gain/loss from investments</small>
+                <div class="value" id="totalReturn">Run batch job for prices</div>
+                <small class="card-note">Requires batch job price data</small>
             </div>
             <div class="card">
                 <h3>Return %</h3>
-                <div class="value" id="returnPct">Fetch prices first</div>
-                <small class="card-note">Percentage gain/loss</small>
+                <div class="value" id="returnPct">Run batch job for prices</div>
+                <small class="card-note">Requires batch job price data</small>
             </div>
             <div class="card">
                 <h3>Holdings</h3>

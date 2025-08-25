@@ -280,51 +280,192 @@ class StatisticalAnalysisService:
         }
     
     def _generate_statistical_recommendations(self, analysis: Dict, holdings: List[Dict]) -> List[Dict]:
-        """Generate recommendations based on statistical analysis"""
+        """Generate individual holding recommendations based on statistical analysis"""
         
         recommendations = []
         
-        # Portfolio overview recommendations
-        overview = analysis['portfolio_overview']
-        if overview['portfolio_return_percentage'] < 0:
+        # Calculate percentiles for relative performance ranking
+        returns = [h['return_percentage'] for h in holdings]
+        values = [h['current_value'] for h in holdings]
+        total_value = sum(values)
+        
+        # Calculate performance percentiles
+        return_percentiles = {
+            'q1': np.percentile(returns, 25),
+            'median': np.percentile(returns, 50), 
+            'q3': np.percentile(returns, 75)
+        }
+        
+        # Generate recommendations for each holding
+        for holding in holdings:
+            ticker = holding['ticker']
+            return_pct = holding['return_percentage']
+            current_value = holding['current_value']
+            weight = current_value / total_value * 100
+            
+            # Determine recommendation based on multiple factors
+            recommendation = self._determine_holding_recommendation(
+                return_pct, weight, return_percentiles, analysis
+            )
+            
+            # Generate rationale
+            rationale = self._generate_holding_rationale(
+                holding, return_pct, weight, return_percentiles, analysis
+            )
+            
+            # Calculate confidence based on data quality and return magnitude
+            confidence = self._calculate_recommendation_confidence(
+                return_pct, weight, holding
+            )
+            
             recommendations.append({
-                'type': 'Performance',
-                'priority': 'High',
-                'recommendation': 'Portfolio showing negative returns. Consider reviewing underperforming positions.',
-                'action': 'Review and potentially rebalance portfolio'
+                'ticker': ticker,
+                'current_value': current_value,
+                'return_percentage': return_pct,
+                'portfolio_weight': weight,
+                'recommendation': recommendation,
+                'action': self._get_action_description(recommendation),
+                'rationale': rationale,
+                'confidence': confidence,
+                'ml_score': round(abs(return_pct) / 10 + weight / 5, 1),  # Simple scoring
+                'technical_indicators': {
+                    'return_rank': self._get_performance_rank(return_pct, return_percentiles),
+                    'weight_category': self._get_weight_category(weight),
+                    'risk_level': self._assess_holding_risk(return_pct, weight)
+                }
             })
         
-        # Concentration recommendations
-        concentration = analysis['concentration_analysis']
-        if concentration['top_position_weight'] > 20:
-            recommendations.append({
-                'type': 'Risk',
-                'priority': 'Medium',
-                'recommendation': f'High concentration in top position ({concentration["top_position_weight"]:.1f}%). Consider diversifying.',
-                'action': 'Reduce position size or add more positions'
-            })
-        
-        # Risk recommendations
-        risk = analysis['risk_analysis']
-        if risk['portfolio_volatility'] > 25:
-            recommendations.append({
-                'type': 'Risk',
-                'priority': 'High',
-                'recommendation': 'High portfolio volatility detected. Consider risk management strategies.',
-                'action': 'Add defensive positions or reduce risk exposure'
-            })
-        
-        # Performance recommendations
-        performance = analysis['performance_metrics']
-        if performance['sharpe_ratio'] < 0.5:
-            recommendations.append({
-                'type': 'Performance',
-                'priority': 'Medium',
-                'recommendation': 'Low risk-adjusted returns. Portfolio may not be efficiently positioned.',
-                'action': 'Consider optimizing position sizes and asset selection'
-            })
+        # Sort by confidence and return for better display
+        recommendations.sort(key=lambda x: (-x['confidence'], -x['return_percentage']))
         
         return recommendations
+    
+    def _determine_holding_recommendation(self, return_pct: float, weight: float, 
+                                        return_percentiles: Dict, analysis: Dict) -> str:
+        """Determine BUY/HOLD/SELL recommendation for a holding"""
+        
+        # Strong performance indicators
+        if return_pct > return_percentiles['q3'] and return_pct > 15:
+            if weight < 15:  # Not over-concentrated
+                return 'BUY'
+            else:
+                return 'HOLD'  # Good performer but already large position
+        
+        # Poor performance indicators  
+        elif return_pct < return_percentiles['q1'] and return_pct < -20:
+            return 'SELL'
+        
+        # Over-concentration risk
+        elif weight > 25:
+            if return_pct < 0:
+                return 'SELL'  # Large losing position
+            else:
+                return 'HOLD'  # Large winning position - hold but don't add
+        
+        # Moderate performers
+        elif return_percentiles['q1'] <= return_pct <= return_percentiles['q3']:
+            if weight < 5:
+                return 'BUY'  # Small position in decent performer
+            else:
+                return 'HOLD'
+        
+        # Default to HOLD for edge cases
+        else:
+            return 'HOLD'
+    
+    def _generate_holding_rationale(self, holding: Dict, return_pct: float, weight: float,
+                                  return_percentiles: Dict, analysis: Dict) -> str:
+        """Generate detailed rationale for the recommendation"""
+        
+        rationale_parts = []
+        
+        # Performance analysis
+        if return_pct > return_percentiles['q3']:
+            rationale_parts.append(f"Top quartile performer (+{return_pct:.1f}%)")
+        elif return_pct < return_percentiles['q1']:
+            rationale_parts.append(f"Bottom quartile performer ({return_pct:.1f}%)")
+        else:
+            rationale_parts.append(f"Moderate performer ({return_pct:.1f}%)")
+        
+        # Position size analysis
+        if weight > 20:
+            rationale_parts.append(f"Large position ({weight:.1f}% of portfolio)")
+        elif weight < 5:
+            rationale_parts.append(f"Small position ({weight:.1f}% of portfolio)")
+        else:
+            rationale_parts.append(f"Balanced position ({weight:.1f}% of portfolio)")
+        
+        # Add risk context
+        if abs(return_pct) > 30:
+            rationale_parts.append("High volatility asset")
+        elif abs(return_pct) < 5:
+            rationale_parts.append("Stable performer")
+        
+        return ". ".join(rationale_parts) + "."
+    
+    def _calculate_recommendation_confidence(self, return_pct: float, weight: float, 
+                                          holding: Dict) -> int:
+        """Calculate confidence score (0-100) for the recommendation"""
+        
+        confidence = 70  # Base confidence
+        
+        # Higher confidence for clear winners/losers
+        if abs(return_pct) > 20:
+            confidence += 15
+        elif abs(return_pct) > 10:
+            confidence += 10
+        
+        # Higher confidence for appropriately sized positions
+        if 5 <= weight <= 15:
+            confidence += 10
+        elif weight > 25 or weight < 2:
+            confidence += 15  # Clear over/under weight
+        
+        # Adjust for extreme cases
+        if return_pct < -30:
+            confidence += 10  # Clear sell signal
+        elif return_pct > 50:
+            confidence += 10  # Clear winner
+        
+        return min(95, confidence)  # Cap at 95%
+    
+    def _get_action_description(self, recommendation: str) -> str:
+        """Get action description for recommendation"""
+        actions = {
+            'BUY': 'Consider increasing position size',
+            'SELL': 'Consider reducing or closing position', 
+            'HOLD': 'Maintain current position size'
+        }
+        return actions.get(recommendation, 'Monitor closely')
+    
+    def _get_performance_rank(self, return_pct: float, percentiles: Dict) -> str:
+        """Get performance ranking description"""
+        if return_pct > percentiles['q3']:
+            return 'Top Quartile'
+        elif return_pct > percentiles['median']:
+            return 'Above Average'
+        elif return_pct > percentiles['q1']:
+            return 'Below Average'
+        else:
+            return 'Bottom Quartile'
+    
+    def _get_weight_category(self, weight: float) -> str:
+        """Categorize position weight"""
+        if weight > 20:
+            return 'Overweight'
+        elif weight < 3:
+            return 'Underweight'
+        else:
+            return 'Balanced'
+    
+    def _assess_holding_risk(self, return_pct: float, weight: float) -> str:
+        """Assess individual holding risk level"""
+        if abs(return_pct) > 30 and weight > 15:
+            return 'High'
+        elif abs(return_pct) > 20 or weight > 25:
+            return 'Medium'
+        else:
+            return 'Low'
     
     # Helper methods for classifications and calculations
     
