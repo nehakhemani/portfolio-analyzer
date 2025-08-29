@@ -1,5 +1,4 @@
 # Docker Compose for Local Development - Multi-User Portfolio Analyzer
-version: '3.8'
 
 services:
   portfolio-app:
