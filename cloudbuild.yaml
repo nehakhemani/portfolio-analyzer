@@ -1,0 +1,24 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'build'
+      - '-f'
+      - 'Dockerfile.cloud'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/portfolio-analyzer-clean:latest'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/portfolio-analyzer-clean:$BUILD_ID'
+      - '.'
+      
+  # Push the container image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'push'
+      - '--all-tags'
+      - 'gcr.io/$PROJECT_ID/portfolio-analyzer-clean'
+
+# Make images available to Cloud Run
+images:
+  - 'gcr.io/$PROJECT_ID/portfolio-analyzer-clean:latest'
+  - 'gcr.io/$PROJECT_ID/portfolio-analyzer-clean:$BUILD_ID'
