@@ -1,7 +1,6 @@
 # The Hidden Giant: Why Data Migration Makes or Breaks Your Digital Transformation
 ## A Battle-Tested Guide from Years in the Trenches
 
-![Data Migration Complexity - Suggested header image]
 
 *The moment of truth came when I saw the numbers: thousands of revenue transaction records that had to be migrated within a single day. Every hour of downtime meant losing money—real money that would show up in quarterly reports and shareholder questions. The technical solution existed, but it would require the same individuals to work for 48 hours straight. No rotation, no substitutes—because only they understood the intricate business logic buried in years of customizations. That's when I truly understood: data migration isn't about having the best tools or the smartest AI. It's about human skill, determination, and the sheer perseverance to push through when the only thing standing between success and disaster is your team's ability to stay focused at hour 47. There's no middle ground in data migration—you either emerge as the hero or watch everything crumble.*
 
@@ -358,7 +357,7 @@ Choose wisely.
 
 Remember that 48-hour stretch I mentioned at the beginning? We made it. Every single revenue transaction migrated. No data loss. No corruption. The team that pulled it off—they became legends in our organization.
 
-But here's what nobody talks about: Two team members ended up in the hospital from exhaustion. One resigned a month later, burnt out beyond recovery. Another developed chronic insomnia that took years to overcome.
+But here's what nobody talks about: Two team members ended up in the hospital from exhaustion. One resigned a month later, burnt out beyond recovery.Many left the data migration field forever.
 
 The migration was technically successful. We saved the company millions in potential downtime. But the human cost? That's the part that keeps me up at night. That's why I now fight for realistic migration windows, for proper team rotation, for recognizing that behind every successful migration are human beings pushing themselves beyond reasonable limits.
 
@@ -370,8 +369,8 @@ Because it probably does.
 
 ---
 
-*About the Author: [Your name] has led data migration initiatives for [X] years across multiple enterprise transformations in [industries]. Currently [your current role], they specialize in turning "impossible" migrations into successful transformations.*
+*About the Author: Neha Khemani has led data migration initiatives for 10 years across multiple enterprise transformations in Telecom, ERP. Currently Data Solution Delivery lead, they specialize in turning "impossible" migrations into successful transformations.*
 
-*Have your own migration war story? Connect with me on LinkedIn or Twitter [@yourhandle]. I collect these stories—partly for education, mostly for therapy.*
+*Have your own migration war story? Connect with me on LinkedIn www.linkedin.com/in/neha-khemani. I collect these stories—partly for education, mostly for therapy.*
 
 *If you found this valuable, please share it with someone planning a transformation. You might just save their sanity (and their project).*
